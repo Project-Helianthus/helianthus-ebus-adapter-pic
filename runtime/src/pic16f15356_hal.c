@@ -246,6 +246,10 @@ picfw_bool_t picfw_pic16f15356_mainline_service(picfw_pic16f15356_hal_t *hal, pi
     advanced_time = PICFW_TRUE;
   }
 
+  /* Always sample bus-busy signal so the field is current even on idle cycles.
+   * RB1 HIGH = another device transmitting = defer frame emission. */
+  runtime->bus_busy = picfw_pic16f15356_hal_signal_detect(hal);
+
   if (!delivered && !advanced_time) {
     return PICFW_FALSE;
   }

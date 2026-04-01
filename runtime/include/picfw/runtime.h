@@ -117,6 +117,9 @@ typedef struct picfw_runtime {
   picfw_bool_t arbitration_active;
   uint8_t arbitration_initiator;
 
+  /* --- Bus state (set by HAL before runtime_step) --- */
+  picfw_bool_t bus_busy; /* RB1 signal detect: TRUE = defer emission */
+
   /* --- Scan engine --- */
   uint32_t protocol_tick_ms;
   uint32_t protocol_deadline_ms;

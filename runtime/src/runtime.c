@@ -1614,6 +1614,11 @@ static void picfw_runtime_service_periodic_status(picfw_runtime_t *runtime) {
   if (runtime->host_parser_active) {
     return;
   }
+  /* Defer emission when eBUS bus is busy (another device transmitting).
+   * Matches Ghidra line 3825: PORTB bit 1 HIGH gates output stage. */
+  if (runtime->bus_busy) {
+    return;
+  }
 
   for (emissions = 0u; emissions < PICFW_RUNTIME_STATUS_EMISSION_BUDGET;
        ++emissions) {
@@ -1684,6 +1689,7 @@ void picfw_runtime_init(picfw_runtime_t *runtime,
   runtime->host_parser_active = PICFW_FALSE;
   runtime->arbitration_active = PICFW_FALSE;
   runtime->arbitration_initiator = 0u;
+  runtime->bus_busy = PICFW_FALSE;
   picfw_runtime_seed_scan_state(runtime);
   runtime->status_snapshot_deadline_ms = 0u;
   runtime->status_variant_deadline_ms = 0u;
