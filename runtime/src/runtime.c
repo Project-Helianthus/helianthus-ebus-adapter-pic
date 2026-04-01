@@ -104,21 +104,29 @@ picfw_runtime_byte_queue_pop(picfw_runtime_byte_queue_t *queue,
   return PICFW_TRUE;
 }
 
+static picfw_bool_t is_valid_protocol_state(uint8_t state) {
+  switch (state) {
+  case PICFW_PROTOCOL_STATE_IDLE:
+  case PICFW_PROTOCOL_STATE_PENDING:
+  case PICFW_PROTOCOL_STATE_ARMED:
+  case PICFW_PROTOCOL_STATE_READY:
+  case PICFW_PROTOCOL_STATE_VARIANT:
+  case PICFW_PROTOCOL_STATE_OFFSET_SCAN:
+  case PICFW_PROTOCOL_STATE_SCAN:
+  case PICFW_PROTOCOL_STATE_RETRY:
+    return PICFW_TRUE;
+  default:
+    return PICFW_FALSE;
+  }
+}
+
 static void picfw_runtime_set_protocol_state(picfw_runtime_t *runtime,
                                              uint8_t state, uint8_t flags) {
   if (runtime == 0) {
     return;
   }
 
-  /* Validate state is a known value */
-  if (state != PICFW_PROTOCOL_STATE_IDLE &&
-      state != PICFW_PROTOCOL_STATE_PENDING &&
-      state != PICFW_PROTOCOL_STATE_ARMED &&
-      state != PICFW_PROTOCOL_STATE_READY &&
-      state != PICFW_PROTOCOL_STATE_VARIANT &&
-      state != PICFW_PROTOCOL_STATE_OFFSET_SCAN &&
-      state != PICFW_PROTOCOL_STATE_SCAN &&
-      state != PICFW_PROTOCOL_STATE_RETRY) {
+  if (!is_valid_protocol_state(state)) {
     return; /* reject invalid state */
   }
 
@@ -524,7 +532,7 @@ void picfw_runtime_shift_saved_scan_masks(picfw_runtime_t *runtime,
     return;
   }
 
-  shifted = runtime->saved_scan_seed >> shift_count;
+  shifted = (shift_count >= 32u) ? 0u : (runtime->saved_scan_seed >> shift_count);
   runtime->merged_window_ms |= shifted;
   if (runtime->merged_window_ms < PICFW_RUNTIME_SCAN_MIN_DELAY_MS) {
     runtime->merged_window_ms = PICFW_RUNTIME_SCAN_MIN_DELAY_MS;
@@ -1110,82 +1118,77 @@ size_t picfw_runtime_build_status_variant_frame(const picfw_runtime_t *runtime,
       runtime, PICFW_RUNTIME_STATUS_KIND_VARIANT, out, out_cap);
 }
 
-picfw_bool_t picfw_runtime_protocol_state_dispatch(picfw_runtime_t *runtime,
-                                                   uint8_t protocol_code,
-                                                   uint8_t *return_code) {
-  uint8_t rc = 0u; /* cppcheck-suppress unreadVariable ; initialized for all paths */
+/* Helper: write return_code if the pointer is non-null. */
+static void dispatch_set_return_code(uint8_t *return_code, uint8_t value) {
+  if (return_code != 0) {
+    *return_code = value;
+  }
+}
 
-  if (runtime == 0) {
-    if (return_code != 0) {
-      *return_code = 0xFFu;
+/* Dispatch sub-handler for flags == RETRY.
+ * Returns 0 = fall through to common tail, 1 = early TRUE, -1 = early FALSE. */
+static int dispatch_flags_retry(picfw_runtime_t *runtime,
+                                uint8_t protocol_code,
+                                uint8_t *return_code) {
+  if (runtime->protocol_state == PICFW_PROTOCOL_STATE_PENDING) {
+    if (protocol_code != PICFW_RUNTIME_PROTOCOL_CODE_SLOT_03) {
+      dispatch_set_return_code(return_code,
+          (uint8_t)(protocol_code ^ PICFW_RUNTIME_PROTOCOL_CODE_SLOT_03));
+      return -1;
     }
-    return PICFW_FALSE;
+    picfw_runtime_restore_scan_seed(runtime);
+    picfw_runtime_set_protocol_state_ready(runtime);
+    dispatch_set_return_code(return_code, 0u);
+    return 1;
   }
 
-  if (runtime->protocol_state_flags == PICFW_RUNTIME_FLAGS_RETRY) {
-    if (runtime->protocol_state == PICFW_PROTOCOL_STATE_PENDING) {
-      if (protocol_code != PICFW_RUNTIME_PROTOCOL_CODE_SLOT_03) {
-        rc = (uint8_t)(protocol_code ^ PICFW_RUNTIME_PROTOCOL_CODE_SLOT_03);
-        if (return_code != 0) {
-          *return_code = rc;
-        }
-        return PICFW_FALSE;
-      }
-      picfw_runtime_restore_scan_seed(runtime);
-      picfw_runtime_set_protocol_state_ready(runtime);
-      if (return_code != 0) {
-        *return_code = 0u;
-      }
-      return PICFW_TRUE;
-    }
-
-    if (runtime->protocol_state != PICFW_PROTOCOL_STATE_READY) {
-      if (runtime->protocol_state != PICFW_PROTOCOL_STATE_RETRY) {
-        rc = (uint8_t)(runtime->protocol_state ^ PICFW_PROTOCOL_STATE_RETRY);
-        if (return_code != 0) {
-          *return_code = rc;
-        }
-        return PICFW_FALSE;
-      }
-      if (protocol_code != PICFW_RUNTIME_PROTOCOL_CODE_DEFAULT) {
-        rc = (uint8_t)(protocol_code ^ PICFW_RUNTIME_PROTOCOL_CODE_DEFAULT);
-        if (return_code != 0) {
-          *return_code = rc;
-        }
-        return PICFW_FALSE;
-      }
-      picfw_runtime_restore_scan_seed(runtime);
-      picfw_runtime_prepare_scan_deadline(runtime,
-                                          PICFW_RUNTIME_SCAN_MIN_DELAY_MS);
-      if (return_code != 0) {
-        *return_code = 0u;
-      }
-      return PICFW_TRUE;
-    }
-  } else {
-    if (runtime->protocol_state_flags != PICFW_RUNTIME_FLAGS_SCAN) {
-      rc = (uint8_t)(runtime->protocol_state_flags ^ PICFW_RUNTIME_FLAGS_SCAN);
-      if (return_code != 0) {
-        *return_code = rc;
-      }
-      return PICFW_FALSE;
-    }
-    if (runtime->protocol_state != PICFW_PROTOCOL_STATE_READY) {
-      rc = (uint8_t)(runtime->protocol_state ^ PICFW_PROTOCOL_STATE_READY);
-      if (return_code != 0) {
-        *return_code = rc;
-      }
-      return PICFW_FALSE;
-    }
+  if (runtime->protocol_state == PICFW_PROTOCOL_STATE_READY) {
+    return 0; /* fall through to common tail */
   }
 
+  if (runtime->protocol_state != PICFW_PROTOCOL_STATE_RETRY) {
+    dispatch_set_return_code(return_code,
+        (uint8_t)(runtime->protocol_state ^ PICFW_PROTOCOL_STATE_RETRY));
+    return -1;
+  }
+  if (protocol_code != PICFW_RUNTIME_PROTOCOL_CODE_DEFAULT) {
+    dispatch_set_return_code(return_code,
+        (uint8_t)(protocol_code ^ PICFW_RUNTIME_PROTOCOL_CODE_DEFAULT));
+    return -1;
+  }
+  picfw_runtime_restore_scan_seed(runtime);
+  picfw_runtime_prepare_scan_deadline(runtime, PICFW_RUNTIME_SCAN_MIN_DELAY_MS);
+  dispatch_set_return_code(return_code, 0u);
+  return 1;
+}
+
+/* Dispatch sub-handler for flags != RETRY (expects SCAN).
+ * Returns 0 = fall through to common tail, -1 = early FALSE. */
+static int dispatch_flags_scan(const picfw_runtime_t *runtime,
+                               uint8_t *return_code) {
+  if (runtime->protocol_state_flags != PICFW_RUNTIME_FLAGS_SCAN) {
+    dispatch_set_return_code(return_code,
+        (uint8_t)(runtime->protocol_state_flags ^ PICFW_RUNTIME_FLAGS_SCAN));
+    return -1;
+  }
+  if (runtime->protocol_state != PICFW_PROTOCOL_STATE_READY) {
+    dispatch_set_return_code(return_code,
+        (uint8_t)(runtime->protocol_state ^ PICFW_PROTOCOL_STATE_READY));
+    return -1;
+  }
+  return 0; /* fall through to common tail */
+}
+
+/* Common tail for protocol state dispatch: handles DEFAULT code and
+ * SLOT_01 vs other protocol codes. */
+static picfw_bool_t dispatch_common_tail(picfw_runtime_t *runtime,
+                                         uint8_t protocol_code,
+                                         uint8_t *return_code) {
   if (protocol_code == PICFW_RUNTIME_PROTOCOL_CODE_DEFAULT) {
     picfw_runtime_restore_scan_seed(runtime);
     picfw_runtime_update_scan_deadline_and_mark_ready(
         runtime, runtime->scan_window_delay_ms);
-    if (return_code != 0) {
-      *return_code = 0x01u;
-    }
+    dispatch_set_return_code(return_code, 0x01u);
     return PICFW_TRUE;
   }
 
@@ -1195,10 +1198,34 @@ picfw_bool_t picfw_runtime_protocol_state_dispatch(picfw_runtime_t *runtime,
     picfw_runtime_set_protocol_state_ready(runtime);
   }
 
-  if (return_code != 0) {
-    *return_code = 0u;
-  }
+  dispatch_set_return_code(return_code, 0u);
   return PICFW_TRUE;
+}
+
+picfw_bool_t picfw_runtime_protocol_state_dispatch(picfw_runtime_t *runtime,
+                                                   uint8_t protocol_code,
+                                                   uint8_t *return_code) {
+  int result;
+
+  if (runtime == 0) {
+    dispatch_set_return_code(return_code, 0xFFu);
+    return PICFW_FALSE;
+  }
+
+  if (runtime->protocol_state_flags == PICFW_RUNTIME_FLAGS_RETRY) {
+    result = dispatch_flags_retry(runtime, protocol_code, return_code);
+  } else {
+    result = dispatch_flags_scan(runtime, return_code);
+  }
+
+  if (result < 0) {
+    return PICFW_FALSE;
+  }
+  if (result > 0) {
+    return PICFW_TRUE;
+  }
+
+  return dispatch_common_tail(runtime, protocol_code, return_code);
 }
 
 picfw_bool_t picfw_runtime_compute_next_scan_cursor(picfw_runtime_t *runtime,
@@ -1241,88 +1268,52 @@ void picfw_runtime_run_scan_fsm(picfw_runtime_t *runtime) {
   picfw_runtime_run_scan_pass(runtime);
 }
 
-/* DIVERGENCE FROM ORIGINAL: The decompiled continue_scan_fsm uses recursive
- * tail-calls to advance the FSM to completion in a single invocation. This
- * scaffold advances one phase per call, driven by the periodic step() timer.
- * This means scan cycles complete over multiple step() calls rather than
- * in one burst. The observable behavior (status frames, protocol states)
- * is equivalent but the timing of intermediate states differs. */
-void picfw_runtime_continue_scan_fsm(picfw_runtime_t *runtime,
-                                     uint8_t reason_code) {
-  uint8_t code;
+/* --- continue_scan_fsm phase handlers --- */
 
-  PICFW_ASSERT(runtime != 0);
-  if (runtime == 0) {
+static void continue_fsm_phase_retry(picfw_runtime_t *runtime) {
+  uint8_t return_code = 0u;
+
+  if (runtime->scan_retry_deadline_ms != 0u &&
+      !picfw_deadline_reached_u32(runtime->now_ms,
+                                  runtime->scan_retry_deadline_ms)) {
     return;
   }
 
-  if (reason_code != 0u) {
-    runtime->scan_phase = PICFW_RUNTIME_SCAN_PHASE_RETRY;
-    runtime->scan_protocol_code = PICFW_RUNTIME_PROTOCOL_CODE_DEFAULT;
-    runtime->last_error = reason_code;
-    picfw_runtime_set_protocol_state(runtime, PICFW_PROTOCOL_STATE_RETRY,
-                                     PICFW_RUNTIME_FLAGS_RETRY);
-    runtime->scan_pass_deadline_ms = 0u;
-    picfw_runtime_prepare_scan_retry_deadline(runtime);
-    return;
-  }
+  runtime->scan_retry_deadline_ms = 0u;
+  (void)picfw_runtime_protocol_state_dispatch(
+      runtime, runtime->scan_protocol_code, &return_code);
+  runtime->scan_phase = PICFW_RUNTIME_SCAN_PHASE_IDLE;
+  runtime->scan_dispatch_cursor = 0u;
+}
 
-  /*
-   * Scan phase dispatch.  IDLE and RETRY terminate early.  PRIMED may
-   * transition to PASS (via finalize_scan_pass), then fall through to
-   * the common probe-deadline / variant-dispatch logic that also
-   * handles the PASS case.  A pure switch cannot capture this
-   * fall-through, so PRIMED and PASS are handled after the switch.
-   */
-  switch (runtime->scan_phase) {
-  case PICFW_RUNTIME_SCAN_PHASE_IDLE:
-    picfw_runtime_run_scan_fsm(runtime);
-    return;
-
-  case PICFW_RUNTIME_SCAN_PHASE_RETRY: {
-    uint8_t return_code = 0u;
-
-    if (runtime->scan_retry_deadline_ms != 0u &&
-        !picfw_deadline_reached_u32(runtime->now_ms,
-                                    runtime->scan_retry_deadline_ms)) {
-      return;
-    }
-
-    runtime->scan_retry_deadline_ms = 0u;
-    (void)picfw_runtime_protocol_state_dispatch(
-        runtime, runtime->scan_protocol_code, &return_code);
-    runtime->scan_phase = PICFW_RUNTIME_SCAN_PHASE_IDLE;
-    runtime->scan_dispatch_cursor = 0u;
-    return;
-  }
-
-  case PICFW_RUNTIME_SCAN_PHASE_PRIMED:
-  case PICFW_RUNTIME_SCAN_PHASE_PASS:
-    /* Fall through to post-switch logic. */
-    break;
-  }
-
+/* Returns true if the caller should return early (not proceed to variant dispatch). */
+static picfw_bool_t continue_fsm_process_pass_descriptors(picfw_runtime_t *runtime) {
   /* PRIMED: attempt finalize; if not ready, return early. */
   if (runtime->scan_phase == PICFW_RUNTIME_SCAN_PHASE_PRIMED &&
       !picfw_runtime_finalize_scan_pass(runtime)) {
-    return;
+    return PICFW_TRUE;
   }
 
   /* PASS (or PRIMED that just transitioned to PASS): process descriptors. */
-  if (runtime->scan_phase == PICFW_RUNTIME_SCAN_PHASE_PASS) {
-    if (runtime->descriptor_data_len >= 8u) {
-      if (picfw_runtime_shift_scan_masks_by_delta(runtime, 1u)) {
-        picfw_runtime_load_descriptor_block(runtime);
-      } else {
-        picfw_runtime_merge_pending_scan_masks(runtime);
-        runtime->scan_phase = PICFW_RUNTIME_SCAN_PHASE_RETRY;
-        picfw_runtime_set_protocol_state(runtime, PICFW_PROTOCOL_STATE_RETRY,
-                                         PICFW_RUNTIME_FLAGS_RETRY);
-        picfw_runtime_prepare_scan_retry_deadline(runtime);
-        return;
-      }
+  if (runtime->scan_phase == PICFW_RUNTIME_SCAN_PHASE_PASS &&
+      runtime->descriptor_data_len >= 8u) {
+    if (picfw_runtime_shift_scan_masks_by_delta(runtime, 1u)) {
+      picfw_runtime_load_descriptor_block(runtime);
+    } else {
+      picfw_runtime_merge_pending_scan_masks(runtime);
+      runtime->scan_phase = PICFW_RUNTIME_SCAN_PHASE_RETRY;
+      picfw_runtime_set_protocol_state(runtime, PICFW_PROTOCOL_STATE_RETRY,
+                                       PICFW_RUNTIME_FLAGS_RETRY);
+      picfw_runtime_prepare_scan_retry_deadline(runtime);
+      return PICFW_TRUE;
     }
   }
+
+  return PICFW_FALSE;
+}
+
+static void continue_fsm_variant_dispatch(picfw_runtime_t *runtime) {
+  uint8_t code;
 
   if (runtime->scan_probe_deadline_ms != 0u &&
       !picfw_deadline_reached_u32(runtime->now_ms,
@@ -1364,6 +1355,51 @@ void picfw_runtime_continue_scan_fsm(picfw_runtime_t *runtime,
   picfw_runtime_set_protocol_state_scan(runtime, PICFW_PROTOCOL_STATE_VARIANT);
 }
 
+/* DIVERGENCE FROM ORIGINAL: The decompiled continue_scan_fsm uses recursive
+ * tail-calls to advance the FSM to completion in a single invocation. This
+ * scaffold advances one phase per call, driven by the periodic step() timer.
+ * This means scan cycles complete over multiple step() calls rather than
+ * in one burst. The observable behavior (status frames, protocol states)
+ * is equivalent but the timing of intermediate states differs. */
+void picfw_runtime_continue_scan_fsm(picfw_runtime_t *runtime,
+                                     uint8_t reason_code) {
+  PICFW_ASSERT(runtime != 0);
+  if (runtime == 0) {
+    return;
+  }
+
+  if (reason_code != 0u) {
+    runtime->scan_phase = PICFW_RUNTIME_SCAN_PHASE_RETRY;
+    runtime->scan_protocol_code = PICFW_RUNTIME_PROTOCOL_CODE_DEFAULT;
+    runtime->last_error = reason_code;
+    picfw_runtime_set_protocol_state(runtime, PICFW_PROTOCOL_STATE_RETRY,
+                                     PICFW_RUNTIME_FLAGS_RETRY);
+    runtime->scan_pass_deadline_ms = 0u;
+    picfw_runtime_prepare_scan_retry_deadline(runtime);
+    return;
+  }
+
+  switch (runtime->scan_phase) {
+  case PICFW_RUNTIME_SCAN_PHASE_IDLE:
+    picfw_runtime_run_scan_fsm(runtime);
+    return;
+
+  case PICFW_RUNTIME_SCAN_PHASE_RETRY:
+    continue_fsm_phase_retry(runtime);
+    return;
+
+  case PICFW_RUNTIME_SCAN_PHASE_PRIMED:
+  case PICFW_RUNTIME_SCAN_PHASE_PASS:
+    break;
+  }
+
+  if (continue_fsm_process_pass_descriptors(runtime)) {
+    return;
+  }
+
+  continue_fsm_variant_dispatch(runtime);
+}
+
 void picfw_runtime_start_scan_window(picfw_runtime_t *runtime) {
   PICFW_ASSERT(runtime != 0);
   if (runtime == 0) {
@@ -1401,23 +1437,46 @@ static void picfw_runtime_emit_periodic_snapshot(picfw_runtime_t *runtime) {
   picfw_runtime_enqueue_bytes(runtime, frame, frame_len);
 }
 
+static void dispatch_compute_scan_params(uint32_t scan_seed,
+                                         uint32_t *out_transformed,
+                                         uint32_t *out_limit,
+                                         uint32_t *out_delay) {
+  uint32_t transformed = picfw_runtime_seed_window_transform(scan_seed);
+  uint32_t limit = picfw_runtime_normalize_scan_limit(transformed);
+  uint32_t delay = picfw_runtime_normalize_scan_delay(transformed);
+
+  if (delay > limit) {
+    delay = limit;
+  }
+  *out_transformed = transformed;
+  *out_limit = limit;
+  *out_delay = delay;
+}
+
+static uint32_t dispatch_clamp_merged_window(uint32_t transformed,
+                                             uint32_t delay, uint32_t limit) {
+  uint32_t merged = transformed;
+
+  if (merged < delay) {
+    merged = delay;
+  }
+  if (merged > limit) {
+    merged = limit;
+  }
+  return merged;
+}
+
 picfw_bool_t picfw_runtime_dispatch_scan_code(picfw_runtime_t *runtime,
                                               uint8_t code) {
   uint32_t transformed;
   uint32_t limit;
   uint32_t delay;
-  uint32_t merged;
 
   if (runtime == 0) {
     return PICFW_FALSE;
   }
 
-  transformed = picfw_runtime_seed_window_transform(runtime->scan_seed);
-  limit = picfw_runtime_normalize_scan_limit(transformed);
-  delay = picfw_runtime_normalize_scan_delay(transformed);
-  if (delay > limit) {
-    delay = limit;
-  }
+  dispatch_compute_scan_params(runtime->scan_seed, &transformed, &limit, &delay);
 
   switch (code) {
   case 0x01u:
@@ -1449,14 +1508,8 @@ picfw_bool_t picfw_runtime_dispatch_scan_code(picfw_runtime_t *runtime,
     break;
 
   case 0x3Bu:
-    merged = transformed;
-    if (merged < delay) {
-      merged = delay;
-    }
-    if (merged > limit) {
-      merged = limit;
-    }
-    runtime->merged_window_ms = merged;
+    runtime->merged_window_ms = dispatch_clamp_merged_window(
+        transformed, delay, limit);
     break;
 
   default:
@@ -1489,6 +1542,44 @@ static void picfw_runtime_emit_periodic_variant(picfw_runtime_t *runtime) {
   picfw_runtime_enqueue_bytes(runtime, frame, frame_len);
 }
 
+static picfw_bool_t try_emit_snapshot(picfw_runtime_t *runtime) {
+  uint32_t period;
+
+  if (runtime->status_snapshot_deadline_ms == 0u) {
+    return PICFW_FALSE;
+  }
+  if (!picfw_deadline_reached_u32(runtime->now_ms,
+                                  runtime->status_snapshot_deadline_ms)) {
+    return PICFW_FALSE;
+  }
+
+  period = (uint32_t)runtime->config.status_snapshot_period_ms;
+  if (period != 0u) {
+    runtime->status_snapshot_deadline_ms += period;
+  }
+  picfw_runtime_emit_periodic_snapshot(runtime);
+  return PICFW_TRUE;
+}
+
+static picfw_bool_t try_emit_variant(picfw_runtime_t *runtime) {
+  uint32_t period;
+
+  if (runtime->status_variant_deadline_ms == 0u) {
+    return PICFW_FALSE;
+  }
+  if (!picfw_deadline_reached_u32(runtime->now_ms,
+                                  runtime->status_variant_deadline_ms)) {
+    return PICFW_FALSE;
+  }
+
+  period = (uint32_t)runtime->config.status_variant_period_ms;
+  if (period != 0u) {
+    runtime->status_variant_deadline_ms += period;
+  }
+  picfw_runtime_emit_periodic_variant(runtime);
+  return PICFW_TRUE;
+}
+
 static void picfw_runtime_service_periodic_status(picfw_runtime_t *runtime) {
   uint8_t emissions;
 
@@ -1504,29 +1595,7 @@ static void picfw_runtime_service_periodic_status(picfw_runtime_t *runtime) {
 
   for (emissions = 0u; emissions < PICFW_RUNTIME_STATUS_EMISSION_BUDGET;
        ++emissions) {
-    picfw_bool_t emitted = PICFW_FALSE;
-
-    if (runtime->status_snapshot_deadline_ms != 0u &&
-        picfw_deadline_reached_u32(runtime->now_ms,
-                                   runtime->status_snapshot_deadline_ms)) {
-      uint32_t period = (uint32_t)runtime->config.status_snapshot_period_ms;
-      if (period != 0u) {
-        runtime->status_snapshot_deadline_ms += period;
-      }
-      picfw_runtime_emit_periodic_snapshot(runtime);
-      emitted = PICFW_TRUE;
-    } else if (runtime->status_variant_deadline_ms != 0u &&
-               picfw_deadline_reached_u32(
-                   runtime->now_ms, runtime->status_variant_deadline_ms)) {
-      uint32_t period = (uint32_t)runtime->config.status_variant_period_ms;
-      if (period != 0u) {
-        runtime->status_variant_deadline_ms += period;
-      }
-      picfw_runtime_emit_periodic_variant(runtime);
-      emitted = PICFW_TRUE;
-    }
-
-    if (!emitted) {
+    if (!try_emit_snapshot(runtime) && !try_emit_variant(runtime)) {
       break;
     }
   }
@@ -1638,6 +1707,38 @@ picfw_bool_t picfw_runtime_isr_enqueue_bus_byte(picfw_runtime_t *runtime,
   return PICFW_TRUE;
 }
 
+static void handle_host_cmd_send(picfw_runtime_t *runtime,
+                                 const picfw_enh_frame_t *frame) {
+  runtime->startup_state = PICFW_STARTUP_LIVE_READY;
+  if (!runtime->arbitration_active) {
+    runtime->last_error = PICFW_RUNTIME_ERROR_NO_ACTIVE_SESSION;
+    picfw_runtime_emit_error(runtime, PICFW_ENH_RES_ERROR_HOST,
+                             PICFW_RUNTIME_ERROR_NO_ACTIVE_SESSION);
+    return;
+  }
+  picfw_runtime_emit_received(runtime, frame->data);
+  if (frame->data == PICFW_RUNTIME_SYN_BYTE) {
+    picfw_runtime_clear_arbitration(runtime);
+  }
+}
+
+static void handle_host_cmd_start(picfw_runtime_t *runtime,
+                                  const picfw_enh_frame_t *frame) {
+  runtime->startup_state = PICFW_STARTUP_LIVE_READY;
+  if (frame->data == PICFW_RUNTIME_SYN_BYTE) {
+    picfw_runtime_clear_arbitration(runtime);
+    return;
+  }
+  if (runtime->config.start_should_fail) {
+    picfw_runtime_emit_frame(runtime, PICFW_ENH_RES_FAILED,
+                             runtime->config.start_failure_winner);
+    return;
+  }
+  picfw_runtime_clear_arbitration(runtime);
+  picfw_runtime_begin_arbitration(runtime, frame->data);
+  picfw_runtime_emit_frame(runtime, PICFW_ENH_RES_STARTED, frame->data);
+}
+
 static void picfw_runtime_handle_host_frame(picfw_runtime_t *runtime,
                                             const picfw_enh_frame_t *frame) {
   if (frame == 0) {
@@ -1673,33 +1774,11 @@ static void picfw_runtime_handle_host_frame(picfw_runtime_t *runtime,
     break;
 
   case PICFW_ENH_REQ_SEND:
-    runtime->startup_state = PICFW_STARTUP_LIVE_READY;
-    if (!runtime->arbitration_active) {
-      runtime->last_error = PICFW_RUNTIME_ERROR_NO_ACTIVE_SESSION;
-      picfw_runtime_emit_error(runtime, PICFW_ENH_RES_ERROR_HOST,
-                               PICFW_RUNTIME_ERROR_NO_ACTIVE_SESSION);
-      break;
-    }
-    picfw_runtime_emit_received(runtime, frame->data);
-    if (frame->data == PICFW_RUNTIME_SYN_BYTE) {
-      picfw_runtime_clear_arbitration(runtime);
-    }
+    handle_host_cmd_send(runtime, frame);
     break;
 
   case PICFW_ENH_REQ_START:
-    runtime->startup_state = PICFW_STARTUP_LIVE_READY;
-    if (frame->data == PICFW_RUNTIME_SYN_BYTE) {
-      picfw_runtime_clear_arbitration(runtime);
-      break;
-    }
-    if (runtime->config.start_should_fail) {
-      picfw_runtime_emit_frame(runtime, PICFW_ENH_RES_FAILED,
-                               runtime->config.start_failure_winner);
-      break;
-    }
-    picfw_runtime_clear_arbitration(runtime);
-    picfw_runtime_begin_arbitration(runtime, frame->data);
-    picfw_runtime_emit_frame(runtime, PICFW_ENH_RES_STARTED, frame->data);
+    handle_host_cmd_start(runtime, frame);
     break;
 
   default:
@@ -1713,6 +1792,26 @@ static void picfw_runtime_handle_host_frame(picfw_runtime_t *runtime,
   picfw_runtime_set_protocol_state_ready(runtime);
 }
 
+/* ADAPTER ROLE BOUNDARY: This firmware is a transparent UART bridge between
+ * the ESP host and the eBUS wire. Collision detection (sent-byte vs
+ * received-byte comparison) is NOT implemented in the PIC adapter. The host
+ * (Go gateway) is responsible for all eBUS protocol logic including
+ * collision detection, CRC computation, frame escaping, and retransmission.
+ * The adapter only provides: SYN detection, ENH/ENS host framing, and
+ * byte-level forwarding.
+ *
+ * Lock counter (eBUS Part 12 S6.4) is also a gateway responsibility.
+ * The PIC adapter does not track failed arbitration attempts. */
+static void handle_bus_byte_event(picfw_runtime_t *runtime, uint8_t value) {
+  if (!(runtime->arbitration_active &&
+        value == runtime->arbitration_initiator)) {
+    picfw_runtime_emit_received(runtime, value);
+  }
+  if (value == PICFW_RUNTIME_SYN_BYTE) {
+    picfw_runtime_clear_arbitration(runtime);
+  }
+}
+
 static void picfw_runtime_handle_event(picfw_runtime_t *runtime,
                                        const picfw_runtime_event_t *event) {
   picfw_enh_frame_t frame;
@@ -1722,24 +1821,8 @@ static void picfw_runtime_handle_event(picfw_runtime_t *runtime,
     return;
   }
 
-  /* ADAPTER ROLE BOUNDARY: This firmware is a transparent UART bridge between
-   * the ESP host and the eBUS wire. Collision detection (sent-byte vs
-   * received-byte comparison) is NOT implemented in the PIC adapter. The host
-   * (Go gateway) is responsible for all eBUS protocol logic including
-   * collision detection, CRC computation, frame escaping, and retransmission.
-   * The adapter only provides: SYN detection, ENH/ENS host framing, and
-   * byte-level forwarding.
-   *
-   * Lock counter (eBUS Part 12 S6.4) is also a gateway responsibility.
-   * The PIC adapter does not track failed arbitration attempts. */
   if (event->type == PICFW_RUNTIME_EVENT_BUS_BYTE) {
-    if (!(runtime->arbitration_active &&
-          event->value == runtime->arbitration_initiator)) {
-      picfw_runtime_emit_received(runtime, event->value);
-    }
-    if (event->value == PICFW_RUNTIME_SYN_BYTE) {
-      picfw_runtime_clear_arbitration(runtime);
-    }
+    handle_bus_byte_event(runtime, event->value);
     return;
   }
 

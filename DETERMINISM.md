@@ -23,7 +23,7 @@ The checks scan these directories:
 | R5 | No __delay in critical paths | Skipped* | Context-aware scan |
 | R6 | No float/double/math.h | Yes | Pattern scan |
 | R7 | No variable-length arrays | Yes | Pattern scan (with R2) |
-| R8 | Cyclomatic complexity < 35 per function | Yes | Decision point counting |
+| R8 | Cyclomatic complexity < 15 per function | Yes | Decision point counting |
 | R9 | Hardware timers for temporal decisions | Manual | Code review |
 | R10 | Ring buffers power-of-2, bitmask indexing | Manual | Code review |
 
@@ -66,10 +66,16 @@ make install-hooks
 
 The **only** permitted exception to R3 (bounded loops) is the single `while(1)` main superloop in `main()`.
 
-The R8 complexity threshold is set to 35 (rather than the pipeline default of 15) to accommodate FSM dispatchers and protocol validation functions that naturally have high cyclomatic complexity due to large switch/if structures. Current high-complexity functions:
-- `picboot_request_is_structurally_valid()` CC=34 -- protocol message validation
-- `picfw_runtime_protocol_state_dispatch()` CC=22 -- FSM state dispatcher
-- `picfw_runtime_continue_scan_fsm()` CC=18 -- bus scan FSM
-- `picboot_bootloader_process_request()` CC=16 -- bootloader command dispatcher
+### R8: Flat State Machine Architecture
+The eBUS protocol FSM must be implemented as a flat `switch/case` on an enum state variable. Maximum nesting depth: 2 levels (switch inside switch).
+
+**Prohibited patterns:**
+- Mutable function pointer dispatch (runtime-assigned callbacks)
+- Coroutine-like patterns, setjmp/longjmp
+- Callback chains where the next handler is determined at runtime
+
+**Permitted patterns:**
+- `const` dispatch tables with validated index -- these provide O(1) deterministic dispatch with constant WCET, superior to large switch/case cascades
+- Static function pointer arrays in ROM (never mutated)
 
 No other exceptions exist. If a rule seems too restrictive for your use case, the code design needs to change -- not the rule.

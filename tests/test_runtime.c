@@ -2573,6 +2573,89 @@ static int test_short_form_send_remap(void) {
   return errors;
 }
 
+static int test_protocol_dispatch_error_paths(void) {
+  const char *name = "protocol_dispatch_error_paths";
+  picfw_runtime_t runtime;
+  uint8_t return_code;
+  int errors = 0;
+
+  picfw_runtime_init(&runtime, 0);
+  runtime.now_ms = 0x00000100u;
+
+  /* Test 1: dispatch_flags_scan with invalid flags (not RETRY, not SCAN).
+   * flags=0x00 falls to dispatch_flags_scan, which rejects flags != 0x03. */
+  runtime.protocol_state = PICFW_PROTOCOL_STATE_READY;
+  runtime.protocol_state_flags = 0x00u;
+  return_code = 0u;
+  errors += expect_true(name,
+                        picfw_runtime_protocol_state_dispatch(
+                            &runtime, 0x05u, &return_code) == PICFW_FALSE,
+                        "invalid flags rejected");
+  errors += expect_true(name, return_code == (0x00u ^ 0x03u),
+                        "invalid flags return_code = flags ^ SCAN");
+
+  /* Test 2: dispatch_flags_retry with state=RETRY but wrong protocol_code.
+   * flags=0x01, state=RETRY(8), code=0x06 (not DEFAULT=0x05) -> rejected. */
+  runtime.protocol_state = PICFW_PROTOCOL_STATE_RETRY;
+  runtime.protocol_state_flags = 0x01u;
+  return_code = 0u;
+  errors += expect_true(name,
+                        picfw_runtime_protocol_state_dispatch(
+                            &runtime, 0x06u, &return_code) == PICFW_FALSE,
+                        "retry wrong code rejected");
+  errors += expect_true(name, return_code == (0x06u ^ 0x05u),
+                        "retry wrong code return_code = code ^ DEFAULT");
+
+  /* Test 3: dispatch_flags_retry with unexpected state (IDLE=0, not
+   * PENDING/READY/RETRY). flags=0x01, state=IDLE -> rejected. */
+  runtime.protocol_state = PICFW_PROTOCOL_STATE_IDLE;
+  runtime.protocol_state_flags = 0x01u;
+  return_code = 0u;
+  errors += expect_true(name,
+                        picfw_runtime_protocol_state_dispatch(
+                            &runtime, 0x05u, &return_code) == PICFW_FALSE,
+                        "retry unexpected state rejected");
+  errors += expect_true(name, return_code == (0x00u ^ 0x08u),
+                        "retry unexpected state return_code = IDLE ^ RETRY");
+
+  /* Test 4: NULL runtime returns FALSE with return_code = 0xFF. */
+  return_code = 0u;
+  errors += expect_true(name,
+                        picfw_runtime_protocol_state_dispatch(
+                            NULL, 0x05u, &return_code) == PICFW_FALSE,
+                        "null runtime rejected");
+  errors += expect_true(name, return_code == 0xFFu,
+                        "null runtime return_code = 0xFF");
+
+  /* Test 5: dispatch_flags_retry PENDING + wrong protocol_code.
+   * flags=0x01(RETRY), state=PENDING(1), code=0x05(DEFAULT, not SLOT_03=0x02)
+   * -> rejected with return_code = 0x05 ^ 0x02 = 0x07. */
+  runtime.protocol_state = PICFW_PROTOCOL_STATE_PENDING;
+  runtime.protocol_state_flags = 0x01u;
+  return_code = 0u;
+  errors += expect_true(name,
+                        picfw_runtime_protocol_state_dispatch(
+                            &runtime, 0x05u, &return_code) == PICFW_FALSE,
+                        "retry pending wrong code rejected");
+  errors += expect_true(name, return_code == (0x05u ^ 0x02u),
+                        "retry pending wrong code return_code = code ^ SLOT_03");
+
+  /* Test 6: dispatch_flags_scan with flags=SCAN but state != READY.
+   * flags=0x03(SCAN), state=IDLE(0) -> rejected with
+   * return_code = 0x00 ^ 0x03 = 0x03 (state ^ READY). */
+  runtime.protocol_state = PICFW_PROTOCOL_STATE_IDLE;
+  runtime.protocol_state_flags = 0x03u;
+  return_code = 0u;
+  errors += expect_true(name,
+                        picfw_runtime_protocol_state_dispatch(
+                            &runtime, 0x05u, &return_code) == PICFW_FALSE,
+                        "scan wrong state rejected");
+  errors += expect_true(name, return_code == (0x00u ^ 0x03u),
+                        "scan wrong state return_code = IDLE ^ READY");
+
+  return errors;
+}
+
 int main(void) {
   if (test_pic16f15356_platform_model() != 0) {
     return 1;
@@ -2677,6 +2760,9 @@ int main(void) {
     return 1;
   }
   if (test_short_form_send_remap() != 0) {
+    return 1;
+  }
+  if (test_protocol_dispatch_error_paths() != 0) {
     return 1;
   }
   printf("runtime tests passed\n");

@@ -19,11 +19,9 @@ PICBOOT_JSON := $(BUILD_DIR)/picboot_oracle_check.json
 # --- Determinism Checks ---
 SRC_DIRS := runtime/src runtime/include bootloader/src bootloader/include
 PYTHON := python3
-# Threshold raised from 15 to 35 to accommodate FSM dispatchers and protocol
-# validation functions (e.g. picboot_request_is_structurally_valid CC=34,
-# picfw_runtime_protocol_state_dispatch CC=22, picfw_runtime_continue_scan_fsm CC=18).
-# These functions use large switch/if structures inherent to protocol parsing.
-MAX_COMPLEXITY := 35
+# Threshold lowered from 35 to 15 after refactoring FSM dispatchers and
+# protocol validation into const dispatch tables and sub-handler functions.
+MAX_COMPLEXITY := 15
 MAX_ISR_CYCLES := 60
 
 .PHONY: build test oracle-check clean \
@@ -69,6 +67,7 @@ check-lint:
 		--suppress=missingIncludeSystem \
 		--suppress=knownConditionTrueFalse \
 		--suppress=objectIndex \
+		--suppress=constParameterCallback \
 		--error-exitcode=1 \
 		--inline-suppr \
 		-I runtime/include -I bootloader/include \

@@ -230,6 +230,81 @@ static int check_frame_validation(picboot_bootloader_t *bootloader) {
         return 1;
     }
 
+    /* --- Systematic negative tests for every validation rule entry --- */
+
+    /* ERASE_FLASH (3): min=1 -> reject data_length=0 */
+    request = picboot_make_request(PICBOOT_ERASE_FLASH, PICBOOT_END_BOOT, 0u, NULL, 0u);
+    make_unlock_request(&request);
+    if (picboot_bootloader_process_request(bootloader, &request, &response)) {
+        fprintf(stderr, "[FAIL] %s: erase_flash zero length accepted\n", name);
+        return 1;
+    }
+    if (expect_error_status(name, &response, PICBOOT_ERROR_INVALID_COMMAND)) {
+        return 1;
+    }
+
+    /* READ_EE_DATA (4): min=1 -> reject data_length=0 */
+    request = picboot_make_request(PICBOOT_READ_EE_DATA, 0u, 0u, NULL, 0u);
+    if (picboot_bootloader_process_request(bootloader, &request, &response)) {
+        fprintf(stderr, "[FAIL] %s: read_ee_data zero length accepted\n", name);
+        return 1;
+    }
+    if (expect_error_status(name, &response, PICBOOT_ERROR_INVALID_COMMAND)) {
+        return 1;
+    }
+
+    /* WRITE_EE_DATA (5): min=1 -> reject data_length=0 */
+    request = picboot_make_request(PICBOOT_WRITE_EE_DATA, 0u, 0u, NULL, 0u);
+    make_unlock_request(&request);
+    if (picboot_bootloader_process_request(bootloader, &request, &response)) {
+        fprintf(stderr, "[FAIL] %s: write_ee_data zero length accepted\n", name);
+        return 1;
+    }
+    if (expect_error_status(name, &response, PICBOOT_ERROR_INVALID_COMMAND)) {
+        return 1;
+    }
+
+    /* READ_CONFIG (6): min=1 -> reject data_length=0 */
+    request = picboot_make_request(PICBOOT_READ_CONFIG, 0u, 0u, NULL, 0u);
+    if (picboot_bootloader_process_request(bootloader, &request, &response)) {
+        fprintf(stderr, "[FAIL] %s: read_config zero length accepted\n", name);
+        return 1;
+    }
+    if (expect_error_status(name, &response, PICBOOT_ERROR_INVALID_COMMAND)) {
+        return 1;
+    }
+
+    /* WRITE_CONFIG (7): min=1 -> reject data_length=0 */
+    request = picboot_make_request(PICBOOT_WRITE_CONFIG, 0u, 0u, NULL, 0u);
+    make_unlock_request(&request);
+    if (picboot_bootloader_process_request(bootloader, &request, &response)) {
+        fprintf(stderr, "[FAIL] %s: write_config zero length accepted\n", name);
+        return 1;
+    }
+    if (expect_error_status(name, &response, PICBOOT_ERROR_INVALID_COMMAND)) {
+        return 1;
+    }
+
+    /* CALC_CHECKSUM (8): needs_even -> reject odd length */
+    request = picboot_make_request(PICBOOT_CALC_CHECKSUM, PICBOOT_END_BOOT, 3u, NULL, 0u);
+    if (picboot_bootloader_process_request(bootloader, &request, &response)) {
+        fprintf(stderr, "[FAIL] %s: odd-length checksum accepted\n", name);
+        return 1;
+    }
+    if (expect_error_status(name, &response, PICBOOT_ERROR_INVALID_COMMAND)) {
+        return 1;
+    }
+
+    /* CALC_CRC (10): needs_even -> reject odd length */
+    request = picboot_make_request(PICBOOT_CALC_CRC, PICBOOT_END_BOOT, 3u, NULL, 0u);
+    if (picboot_bootloader_process_request(bootloader, &request, &response)) {
+        fprintf(stderr, "[FAIL] %s: odd-length crc accepted\n", name);
+        return 1;
+    }
+    if (expect_error_status(name, &response, PICBOOT_ERROR_INVALID_COMMAND)) {
+        return 1;
+    }
+
     return 0;
 }
 

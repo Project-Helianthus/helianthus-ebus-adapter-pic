@@ -40,85 +40,71 @@ static bool command_uses_request_payload(uint8_t command) {
            command == PICBOOT_WRITE_CONFIG;
 }
 
+/* --- Validation rules table for picboot_request_is_structurally_valid --- */
+typedef struct {
+    uint16_t min_data_len;
+    uint16_t max_data_len;
+    bool needs_even;
+} picboot_validation_rule_t;
+
+#define PICBOOT_COMMAND_COUNT 11u
+
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+_Static_assert(PICBOOT_COMMAND_COUNT == PICBOOT_CALC_CRC + 1u,
+               "PICBOOT_COMMAND_COUNT must equal highest command ordinal + 1");
+#endif
+
+/* Max data payload size — sizeof(picboot_frame_header_t.data) */
+#define PICBOOT_DATA_CAP (2u * PICBOOT_WRITE_FLASH_BLOCKSIZE)
+
+static const picboot_validation_rule_t PICBOOT_VALIDATION_RULES[PICBOOT_COMMAND_COUNT] = {
+    /* [PICBOOT_READ_VERSION  = 0] */ { 0u, 0u,                                      false },
+    /* [PICBOOT_READ_FLASH    = 1] */ { 1u, PICBOOT_DATA_CAP,                         true  },
+    /* [PICBOOT_WRITE_FLASH   = 2] */ { 1u, PICBOOT_DATA_CAP,                         true  },
+    /* [PICBOOT_ERASE_FLASH   = 3] */ { 1u, PICBOOT_FLASH_BYTES / PICBOOT_ERASE_FLASH_BLOCKSIZE, false },
+    /* [PICBOOT_READ_EE_DATA  = 4] */ { 1u, PICBOOT_DATA_CAP,                         false },
+    /* [PICBOOT_WRITE_EE_DATA = 5] */ { 1u, PICBOOT_DATA_CAP,                         false },
+    /* [PICBOOT_READ_CONFIG   = 6] */ { 1u, PICBOOT_DATA_CAP,                         false },
+    /* [PICBOOT_WRITE_CONFIG  = 7] */ { 1u, PICBOOT_DATA_CAP,                         false },
+    /* [PICBOOT_CALC_CHECKSUM = 8] */ { 1u, PICBOOT_DATA_CAP,                         true  },
+    /* [PICBOOT_RESET_DEVICE  = 9] */ { 0u, 0u,                                      false },
+    /* [PICBOOT_CALC_CRC     = 10] */ { 1u, PICBOOT_DATA_CAP,                         true  },
+};
+
+/* Set error_status (if non-NULL) and return false — de-duplicates the
+ * repeated if(error_status) pattern inside the validator. */
+static bool picboot_validation_fail(uint8_t *error_status, uint8_t code) {
+    if (error_status != NULL) {
+        *error_status = code;
+    }
+    return false;
+}
+
 static bool picboot_request_is_structurally_valid(const picboot_frame_t *request, uint8_t *error_status) {
     uint16_t data_length;
+    const picboot_validation_rule_t *rule;
 
     if (request == NULL) {
-        if (error_status != NULL) {
-            *error_status = PICBOOT_ERROR_INVALID_COMMAND;
-        }
-        return false;
+        return picboot_validation_fail(error_status, PICBOOT_ERROR_INVALID_COMMAND);
+    }
+    if (request->header.command >= PICBOOT_COMMAND_COUNT) {
+        return picboot_validation_fail(error_status, PICBOOT_ERROR_INVALID_COMMAND);
     }
 
     data_length = read_u16_le((const uint8_t *)&request->header.data_length);
     if (request->header.address_u != 0u || request->header.address_unused != 0u) {
-        if (error_status != NULL) {
-            *error_status = PICBOOT_ERROR_INVALID_COMMAND;
-        }
-        return false;
+        return picboot_validation_fail(error_status, PICBOOT_ERROR_INVALID_COMMAND);
     }
 
-    switch (request->header.command) {
-    case PICBOOT_READ_VERSION:
-    case PICBOOT_RESET_DEVICE:
-        if (data_length != 0u) {
-            if (error_status != NULL) {
-                *error_status = PICBOOT_ERROR_INVALID_COMMAND;
-            }
-            return false;
-        }
-        return true;
-
-    case PICBOOT_READ_FLASH:
-    case PICBOOT_CALC_CHECKSUM:
-    case PICBOOT_CALC_CRC:
-        if (data_length == 0u ||
-            (data_length & 1u) != 0u ||
-            data_length > sizeof(request->header.data)) {
-            if (error_status != NULL) {
-                *error_status = PICBOOT_ERROR_INVALID_COMMAND;
-            }
-            return false;
-        }
-        return true;
-
-    case PICBOOT_ERASE_FLASH:
-        if (data_length == 0u || data_length > (PICBOOT_FLASH_BYTES / PICBOOT_ERASE_FLASH_BLOCKSIZE)) {
-            if (error_status != NULL) {
-                *error_status = PICBOOT_ERROR_INVALID_COMMAND;
-            }
-            return false;
-        }
-        return true;
-
-    case PICBOOT_READ_EE_DATA:
-    case PICBOOT_WRITE_EE_DATA:
-    case PICBOOT_READ_CONFIG:
-    case PICBOOT_WRITE_CONFIG:
-        if (data_length == 0u || data_length > sizeof(request->header.data)) {
-            if (error_status != NULL) {
-                *error_status = PICBOOT_ERROR_INVALID_COMMAND;
-            }
-            return false;
-        }
-        return true;
-
-    case PICBOOT_WRITE_FLASH:
-        if (data_length == 0u ||
-            (data_length & 1u) != 0u ||
-            data_length > sizeof(request->header.data)) {
-            if (error_status != NULL) {
-                *error_status = PICBOOT_ERROR_INVALID_COMMAND;
-            }
-            return false;
-        }
-        return true;
+    rule = &PICBOOT_VALIDATION_RULES[request->header.command];
+    if (data_length < rule->min_data_len || data_length > rule->max_data_len) {
+        return picboot_validation_fail(error_status, PICBOOT_ERROR_INVALID_COMMAND);
+    }
+    if (rule->needs_even && (data_length & 1u) != 0u) {
+        return picboot_validation_fail(error_status, PICBOOT_ERROR_INVALID_COMMAND);
     }
 
-    if (error_status != NULL) {
-        *error_status = PICBOOT_ERROR_INVALID_COMMAND;
-    }
-    return false;
+    return true;
 }
 
 static void fill_word_erased(uint8_t *out, size_t len) {
@@ -468,7 +454,7 @@ uint16_t picboot_crc16_ccitt(const uint8_t *data, size_t len) {
     return picboot_crc16_ccitt_impl(data, len);
 }
 
-static bool handle_read_version(const picboot_bootloader_t *bootloader, const picboot_frame_t *request, picboot_frame_t *response) {
+static bool handle_read_version(picboot_bootloader_t *bootloader, const picboot_frame_t *request, picboot_frame_t *response) {
     picboot_version_payload_t payload;
 
     picboot_build_version_payload(bootloader, &payload);
@@ -476,7 +462,7 @@ static bool handle_read_version(const picboot_bootloader_t *bootloader, const pi
     return true;
 }
 
-static bool handle_read_flash(const picboot_bootloader_t *bootloader, const picboot_frame_t *request, picboot_frame_t *response) {
+static bool handle_read_flash(picboot_bootloader_t *bootloader, const picboot_frame_t *request, picboot_frame_t *response) {
     uint16_t length;
     uint16_t address_words;
     size_t offset;
@@ -545,7 +531,7 @@ static bool handle_erase_flash(picboot_bootloader_t *bootloader, const picboot_f
     return true;
 }
 
-static bool handle_read_ee_data(const picboot_bootloader_t *bootloader, const picboot_frame_t *request, picboot_frame_t *response) {
+static bool handle_read_ee_data(picboot_bootloader_t *bootloader, const picboot_frame_t *request, picboot_frame_t *response) {
     uint16_t length;
     uint16_t address;
 
@@ -580,7 +566,7 @@ static bool handle_write_ee_data(picboot_bootloader_t *bootloader, const picboot
     return true;
 }
 
-static bool handle_read_config(const picboot_bootloader_t *bootloader, const picboot_frame_t *request, picboot_frame_t *response) {
+static bool handle_read_config(picboot_bootloader_t *bootloader, const picboot_frame_t *request, picboot_frame_t *response) {
     uint16_t length;
     uint16_t address;
     uint8_t buffer[PICBOOT_FRAME_MAX_LEN];
@@ -634,7 +620,7 @@ static bool handle_reset_device(picboot_bootloader_t *bootloader, const picboot_
     return true;
 }
 
-static bool handle_calc_checksum(const picboot_bootloader_t *bootloader, const picboot_frame_t *request, picboot_frame_t *response) {
+static bool handle_calc_checksum(picboot_bootloader_t *bootloader, const picboot_frame_t *request, picboot_frame_t *response) {
     uint16_t length;
     uint16_t address_words;
     uint16_t check_sum;
@@ -660,7 +646,7 @@ static bool handle_calc_checksum(const picboot_bootloader_t *bootloader, const p
     return true;
 }
 
-static bool handle_calc_crc(const picboot_bootloader_t *bootloader, const picboot_frame_t *request, picboot_frame_t *response) {
+static bool handle_calc_crc(picboot_bootloader_t *bootloader, const picboot_frame_t *request, picboot_frame_t *response) {
     uint16_t length;
     uint16_t address_words;
     uint16_t crc;
@@ -686,8 +672,29 @@ static bool handle_calc_crc(const picboot_bootloader_t *bootloader, const picboo
     return true;
 }
 
+/* --- Const dispatch table for bootloader command handlers --- */
+typedef bool (*picboot_command_handler_t)(
+    picboot_bootloader_t *bootloader,
+    const picboot_frame_t *request,
+    picboot_frame_t *response);
+
+static const picboot_command_handler_t PICBOOT_COMMAND_HANDLERS[PICBOOT_COMMAND_COUNT] = {
+    /* [PICBOOT_READ_VERSION  = 0]  */ handle_read_version,
+    /* [PICBOOT_READ_FLASH    = 1]  */ handle_read_flash,
+    /* [PICBOOT_WRITE_FLASH   = 2]  */ handle_write_flash,
+    /* [PICBOOT_ERASE_FLASH   = 3]  */ handle_erase_flash,
+    /* [PICBOOT_READ_EE_DATA  = 4]  */ handle_read_ee_data,
+    /* [PICBOOT_WRITE_EE_DATA = 5]  */ handle_write_ee_data,
+    /* [PICBOOT_READ_CONFIG   = 6]  */ handle_read_config,
+    /* [PICBOOT_WRITE_CONFIG  = 7]  */ handle_write_config,
+    /* [PICBOOT_CALC_CHECKSUM = 8]  */ handle_calc_checksum,
+    /* [PICBOOT_RESET_DEVICE  = 9]  */ handle_reset_device,
+    /* [PICBOOT_CALC_CRC      = 10] */ handle_calc_crc,
+};
+
 bool picboot_bootloader_process_request(picboot_bootloader_t *bootloader, const picboot_frame_t *request, picboot_frame_t *response) {
     uint8_t error_status;
+    uint8_t cmd;
 
     if (bootloader == NULL || request == NULL || response == NULL) {
         return false;
@@ -701,50 +708,73 @@ bool picboot_bootloader_process_request(picboot_bootloader_t *bootloader, const 
         return false;
     }
 
-    switch (request->header.command) {
-    case PICBOOT_READ_VERSION:
-        bootloader->parser.tx_frames++;
-        return handle_read_version(bootloader, request, response);
-    case PICBOOT_READ_FLASH:
-        bootloader->parser.tx_frames++;
-        return handle_read_flash(bootloader, request, response);
-    case PICBOOT_WRITE_FLASH:
-        bootloader->parser.tx_frames++;
-        return handle_write_flash(bootloader, request, response);
-    case PICBOOT_ERASE_FLASH:
-        bootloader->parser.tx_frames++;
-        return handle_erase_flash(bootloader, request, response);
-    case PICBOOT_READ_EE_DATA:
-        bootloader->parser.tx_frames++;
-        return handle_read_ee_data(bootloader, request, response);
-    case PICBOOT_WRITE_EE_DATA:
-        bootloader->parser.tx_frames++;
-        return handle_write_ee_data(bootloader, request, response);
-    case PICBOOT_READ_CONFIG:
-        bootloader->parser.tx_frames++;
-        return handle_read_config(bootloader, request, response);
-    case PICBOOT_WRITE_CONFIG:
-        bootloader->parser.tx_frames++;
-        return handle_write_config(bootloader, request, response);
-    case PICBOOT_CALC_CHECKSUM:
-        bootloader->parser.tx_frames++;
-        return handle_calc_checksum(bootloader, request, response);
-    case PICBOOT_CALC_CRC:
-        bootloader->parser.tx_frames++;
-        return handle_calc_crc(bootloader, request, response);
-    case PICBOOT_RESET_DEVICE:
-        bootloader->parser.tx_frames++;
-        return handle_reset_device(bootloader, request, response);
-    default:
-        bootloader->parser.tx_frames++;
+    cmd = request->header.command;
+    bootloader->parser.tx_frames++;
+    if (cmd >= PICBOOT_COMMAND_COUNT || PICBOOT_COMMAND_HANDLERS[cmd] == NULL) {
         set_error_response(request, response, PICBOOT_ERROR_INVALID_COMMAND);
         return false;
     }
+    return PICBOOT_COMMAND_HANDLERS[cmd](bootloader, request, response);
+}
+
+/* Reset parser to wait-for-STX state after frame completion or error. */
+static void picboot_parser_reset(picboot_bootloader_t *bootloader) {
+    bootloader->parser.session_synced = false;
+    bootloader->parser.state = PICBOOT_PARSER_WAIT_STX;
+}
+
+/* Try to dispatch a complete frame.  Returns FRAME_READY or ERROR. */
+static picboot_feed_result_t picboot_feed_dispatch(picboot_bootloader_t *bootloader, picboot_frame_t *response) {
+    if (response == NULL) {
+        bootloader->parser.parse_errors++;
+        picboot_parser_reset(bootloader);
+        return PICBOOT_FEED_ERROR;
+    }
+    if (!picboot_bootloader_process_request(bootloader, &bootloader->parser.current, response)) {
+        picboot_parser_reset(bootloader);
+        return PICBOOT_FEED_ERROR;
+    }
+    picboot_parser_reset(bootloader);
+    return PICBOOT_FEED_FRAME_READY;
+}
+
+static picboot_feed_result_t picboot_feed_header(picboot_bootloader_t *bootloader, uint8_t byte, picboot_frame_t *response) {
+    uint16_t expected_payload_len;
+
+    bootloader->parser.current.raw[bootloader->parser.header_bytes++] = byte;
+    if (bootloader->parser.header_bytes < PICBOOT_FRAME_HEADER_LEN) {
+        return PICBOOT_FEED_NEED_MORE;
+    }
+    expected_payload_len = (uint16_t)picboot_expected_request_payload_len(
+        bootloader->parser.current.header.command,
+        read_u16_le((const uint8_t *)&bootloader->parser.current.header.data_length));
+    if (expected_payload_len > sizeof(bootloader->parser.current.header.data)) {
+        bootloader->parser.parse_errors++;
+        picboot_parser_reset(bootloader);
+        return PICBOOT_FEED_ERROR;
+    }
+    bootloader->parser.payload_expected = expected_payload_len;
+    if (expected_payload_len == 0u) {
+        return picboot_feed_dispatch(bootloader, response);
+    }
+    bootloader->parser.state = PICBOOT_PARSER_READ_PAYLOAD;
+    return PICBOOT_FEED_NEED_MORE;
+}
+
+static picboot_feed_result_t picboot_feed_payload(picboot_bootloader_t *bootloader, uint8_t byte, picboot_frame_t *response) {
+    if (bootloader->parser.payload_bytes >= PICBOOT_WRITE_FLASH_BLOCKSIZE * 2u) {
+        bootloader->parser.parse_errors++;
+        picboot_parser_reset(bootloader);
+        return PICBOOT_FEED_ERROR;
+    }
+    bootloader->parser.current.header.data[bootloader->parser.payload_bytes++] = byte;
+    if (bootloader->parser.payload_bytes < bootloader->parser.payload_expected) {
+        return PICBOOT_FEED_NEED_MORE;
+    }
+    return picboot_feed_dispatch(bootloader, response);
 }
 
 picboot_feed_result_t picboot_bootloader_feed(picboot_bootloader_t *bootloader, uint8_t byte, picboot_frame_t *response) {
-    uint16_t expected_payload_len;
-
     if (bootloader == NULL) {
         return PICBOOT_FEED_ERROR;
     }
@@ -765,68 +795,13 @@ picboot_feed_result_t picboot_bootloader_feed(picboot_bootloader_t *bootloader, 
         return PICBOOT_FEED_NEED_MORE;
 
     case PICBOOT_PARSER_READ_HEADER:
-        bootloader->parser.current.raw[bootloader->parser.header_bytes++] = byte;
-        if (bootloader->parser.header_bytes < PICBOOT_FRAME_HEADER_LEN) {
-            return PICBOOT_FEED_NEED_MORE;
-        }
-        expected_payload_len = (uint16_t)picboot_expected_request_payload_len(
-            bootloader->parser.current.header.command,
-            read_u16_le((const uint8_t *)&bootloader->parser.current.header.data_length));
-        if (expected_payload_len > sizeof(bootloader->parser.current.header.data)) {
-            bootloader->parser.parse_errors++;
-            bootloader->parser.session_synced = false;
-            bootloader->parser.state = PICBOOT_PARSER_WAIT_STX;
-            return PICBOOT_FEED_ERROR;
-        }
-        bootloader->parser.payload_expected = expected_payload_len;
-        if (expected_payload_len == 0u) {
-            if (response == NULL) {
-                bootloader->parser.parse_errors++;
-                bootloader->parser.session_synced = false;
-                bootloader->parser.state = PICBOOT_PARSER_WAIT_STX;
-                return PICBOOT_FEED_ERROR;
-            }
-            if (!picboot_bootloader_process_request(bootloader, &bootloader->parser.current, response)) {
-                bootloader->parser.session_synced = false;
-                bootloader->parser.state = PICBOOT_PARSER_WAIT_STX;
-                return PICBOOT_FEED_ERROR;
-            }
-            bootloader->parser.session_synced = false;
-            bootloader->parser.state = PICBOOT_PARSER_WAIT_STX;
-            return PICBOOT_FEED_FRAME_READY;
-        }
-        bootloader->parser.state = PICBOOT_PARSER_READ_PAYLOAD;
-        return PICBOOT_FEED_NEED_MORE;
+        return picboot_feed_header(bootloader, byte, response);
 
     case PICBOOT_PARSER_READ_PAYLOAD:
-        if (bootloader->parser.payload_bytes >= PICBOOT_WRITE_FLASH_BLOCKSIZE * 2u) {
-            bootloader->parser.parse_errors++;
-            bootloader->parser.session_synced = false;
-            bootloader->parser.state = PICBOOT_PARSER_WAIT_STX;
-            return PICBOOT_FEED_ERROR;
-        }
-        bootloader->parser.current.header.data[bootloader->parser.payload_bytes++] = byte;
-        if (bootloader->parser.payload_bytes < bootloader->parser.payload_expected) {
-            return PICBOOT_FEED_NEED_MORE;
-        }
-        if (response == NULL) {
-            bootloader->parser.parse_errors++;
-            bootloader->parser.session_synced = false;
-            bootloader->parser.state = PICBOOT_PARSER_WAIT_STX;
-            return PICBOOT_FEED_ERROR;
-        }
-        if (!picboot_bootloader_process_request(bootloader, &bootloader->parser.current, response)) {
-            bootloader->parser.session_synced = false;
-            bootloader->parser.state = PICBOOT_PARSER_WAIT_STX;
-            return PICBOOT_FEED_ERROR;
-        }
-        bootloader->parser.session_synced = false;
-        bootloader->parser.state = PICBOOT_PARSER_WAIT_STX;
-        return PICBOOT_FEED_FRAME_READY;
+        return picboot_feed_payload(bootloader, byte, response);
     }
 
     bootloader->parser.parse_errors++;
-    bootloader->parser.session_synced = false;
-    bootloader->parser.state = PICBOOT_PARSER_WAIT_STX;
+    picboot_parser_reset(bootloader);
     return PICBOOT_FEED_ERROR;
 }
