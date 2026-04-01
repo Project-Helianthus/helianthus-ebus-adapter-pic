@@ -2685,6 +2685,105 @@ static int test_protocol_dispatch_error_paths(void) {
   return errors;
 }
 
+static int test_gpio_and_pin_model(void) {
+  const char *name = "gpio_and_pin_model";
+  picfw_pic16f15356_hal_t hal;
+  picfw_pic16f15356_straps_t straps;
+  int errors = 0;
+
+  picfw_pic16f15356_hal_runtime_init(&hal);
+
+  /* GPIO register initialization */
+  errors += expect_true(name, hal.regs.trisa == 0x37u, "TRISA init");
+  errors += expect_true(name, hal.regs.trisb == 0x07u, "TRISB init");
+  errors += expect_true(name, hal.regs.trisc == 0x09u, "TRISC init");
+  errors += expect_true(name, hal.regs.ansela == 0x04u, "ANSELA init");
+  errors += expect_true(name, hal.regs.anselb == 0x00u, "ANSELB init");
+  errors += expect_true(name, hal.regs.anselc == 0x00u, "ANSELC init");
+  errors += expect_true(name, hal.regs.wpub == 0x02u, "WPUB init (RB1 pull-up)");
+
+  /* PPS configuration */
+  errors += expect_true(name, hal.regs.rx1pps == PICFW_PPS_RB2_INPUT,
+                        "RX1PPS routes to RB2");
+  errors += expect_true(name, hal.regs.rb3pps == PICFW_PPS_EUSART1_TX,
+                        "RB3PPS routes EUSART1 TX");
+  errors += expect_true(name, hal.regs.rx2pps == PICFW_PPS_RC0_INPUT,
+                        "RX2PPS routes to RC0");
+  errors += expect_true(name, hal.regs.rc1pps_out == PICFW_PPS_EUSART2_TX,
+                        "RC1PPS routes EUSART2 TX");
+
+  /* EUSART2 registers */
+  errors += expect_true(name, hal.regs.baud2con == 0x08u, "BAUD2CON init");
+  errors += expect_true(name, hal.regs.rc2sta == 0x90u, "RC2STA init");
+  errors += expect_true(name, hal.regs.tx2sta == 0x24u, "TX2STA init");
+  errors += expect_true(name, hal.regs.sp2brgl == hal.regs.sp1brgl,
+                        "EUSART2 baud matches EUSART1");
+
+  /* GPIO read: default signal-detect (RB1=1, bus present) */
+  errors += expect_true(name,
+                        picfw_pic16f15356_hal_signal_detect(&hal) == PICFW_TRUE,
+                        "signal detect default high");
+
+  /* GPIO read: simulate no signal (clear RB1) */
+  hal.latches.portb_input = 0x00u;
+  errors += expect_true(name,
+                        picfw_pic16f15356_hal_signal_detect(&hal) == PICFW_FALSE,
+                        "signal detect low after clear");
+
+  /* GPIO write: set LATB bit 0 */
+  picfw_pic16f15356_hal_write_pin(&hal, PICFW_PORT_B, 0u, PICFW_TRUE);
+  errors += expect_true(name, (hal.regs.latb & 1u) == 1u, "write pin sets LAT bit");
+  picfw_pic16f15356_hal_write_pin(&hal, PICFW_PORT_B, 0u, PICFW_FALSE);
+  errors += expect_true(name, (hal.regs.latb & 1u) == 0u, "write pin clears LAT bit");
+
+  /* GPIO read: pin from PORTA */
+  hal.latches.porta_input = 0x10u; /* RA4 = 1 */
+  errors += expect_true(name,
+                        picfw_pic16f15356_hal_read_pin(&hal, PICFW_PORT_A, 4u) == PICFW_TRUE,
+                        "read RA4 high");
+  errors += expect_true(name,
+                        picfw_pic16f15356_hal_read_pin(&hal, PICFW_PORT_A, 0u) == PICFW_FALSE,
+                        "read RA0 low");
+
+  /* Null guards */
+  errors += expect_true(name,
+                        picfw_pic16f15356_hal_read_pin(0, PICFW_PORT_A, 0u) == PICFW_FALSE,
+                        "read pin null guard");
+  errors += expect_true(name,
+                        picfw_pic16f15356_hal_signal_detect(0) == PICFW_FALSE,
+                        "signal detect null guard");
+
+  /* Strap read: default (all high = enhanced, normal speed, RPi/USB) */
+  hal.latches.porta_input = 0x33u; /* RA0=1, RA1=1, RA4=1, RA5=1 */
+  picfw_pic16f15356_hal_read_straps(&hal, &straps);
+  errors += expect_true(name, straps.enhanced_protocol == PICFW_TRUE,
+                        "strap: enhanced protocol (pin high)");
+  errors += expect_true(name, straps.high_speed == PICFW_FALSE,
+                        "strap: normal speed (pin high -> !high_speed)");
+  errors += expect_true(name, straps.variant == 0u,
+                        "strap: RPi/USB variant");
+
+  /* Strap read: high-speed + ethernet */
+  hal.latches.porta_input = 0x10u; /* RA4=1(enhanced), RA5=0(high-speed), RA0=0, RA1=0 */
+  picfw_pic16f15356_hal_read_straps(&hal, &straps);
+  errors += expect_true(name, straps.high_speed == PICFW_TRUE,
+                        "strap: high-speed (pin low)");
+  errors += expect_true(name, straps.variant == 2u,
+                        "strap: Ethernet (both low)");
+
+  /* TX ISR handlers */
+  errors += expect_true(name, hal.latches.host_tx_ready == PICFW_FALSE,
+                        "host_tx_ready initially false");
+  picfw_pic16f15356_isr_latch_host_tx_ready(&hal);
+  errors += expect_true(name, hal.latches.host_tx_ready == PICFW_TRUE,
+                        "host_tx_ready set by ISR");
+  picfw_pic16f15356_isr_latch_bus_tx_ready(&hal);
+  errors += expect_true(name, hal.latches.bus_tx_ready == PICFW_TRUE,
+                        "bus_tx_ready set by ISR");
+
+  return errors;
+}
+
 int main(void) {
   if (test_pic16f15356_platform_model() != 0) {
     return 1;
@@ -2792,6 +2891,9 @@ int main(void) {
     return 1;
   }
   if (test_protocol_dispatch_error_paths() != 0) {
+    return 1;
+  }
+  if (test_gpio_and_pin_model() != 0) {
     return 1;
   }
   printf("runtime tests passed\n");
