@@ -153,8 +153,8 @@ void picfw_pic16f15356_hal_runtime_init(picfw_pic16f15356_hal_t *hal) {
    * PPS/SPI config reconfigures these pins.  Both LOW (shorted by J11
    * jumper) = enter bootloader mode instead of application.
    * On real hardware, this is the first GPIO read at POR.  In simulation,
-   * portb_input defaults to 0xC2 (normal boot); tests override to 0x02
-   * (J11 shorted) before calling runtime_init. */
+   * portb_input defaults to 0xC2 (normal boot, RB6+RB7 HIGH).  Tests
+   * verify the detection logic via direct read_pin calls after init. */
   {
     picfw_bool_t pgc = picfw_pic16f15356_hal_read_pin(
         hal, PICFW_PIN_J11_PGC_PORT, PICFW_PIN_J11_PGC_BIT);
