@@ -2747,6 +2747,30 @@ static int test_signal_detect_gates_status_emission(void) {
   return errors;
 }
 
+static int test_arbitration_delay_api(void) {
+  const char *name = "arbitration_delay_api";
+  picfw_runtime_config_t config;
+  picfw_runtime_t runtime;
+  int errors = 0;
+
+  /* Default config: delay = 0 */
+  picfw_runtime_config_init_default(&config);
+  errors += expect_true(name, config.arbitration_delay_us == 0u,
+                        "default delay is 0");
+
+  /* Set custom delay */
+  config.arbitration_delay_us = 150u;
+  picfw_runtime_init(&runtime, &config);
+  errors += expect_true(name, runtime.config.arbitration_delay_us == 150u,
+                        "custom delay propagated to runtime");
+
+  /* Verify it's accessible and doesn't corrupt other config */
+  errors += expect_true(name, runtime.config.init_features == config.init_features,
+                        "other config fields unaffected");
+
+  return errors;
+}
+
 static int test_eeprom(void) {
   const char *name = "eeprom";
   picfw_eeprom_t ee;
@@ -3479,6 +3503,9 @@ int main(void) {
     return 1;
   }
   if (test_921600_baud_mode() != 0) {
+    return 1;
+  }
+  if (test_arbitration_delay_api() != 0) {
     return 1;
   }
   if (test_eeprom() != 0) {

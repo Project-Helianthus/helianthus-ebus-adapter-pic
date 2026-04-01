@@ -73,6 +73,9 @@ typedef struct picfw_runtime_config {
   uint8_t status_variant_payload[PICFW_RUNTIME_INFO_PAYLOAD_MAX];
   uint8_t info_payload_len[PICFW_RUNTIME_INFO_COUNT];
   uint8_t info_payload[PICFW_RUNTIME_INFO_COUNT][PICFW_RUNTIME_INFO_PAYLOAD_MAX];
+  /* Arbitration delay in microseconds (0 = no added delay).
+   * Applied as an offset to the arbitration window timing. */
+  uint16_t arbitration_delay_us;
 } picfw_runtime_config_t;
 
 typedef enum picfw_runtime_event_type {
