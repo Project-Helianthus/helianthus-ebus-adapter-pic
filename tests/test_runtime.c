@@ -2747,6 +2747,121 @@ static int test_signal_detect_gates_status_emission(void) {
   return errors;
 }
 
+static int test_w5500_driver(void) {
+  const char *name = "w5500_driver";
+  picfw_w5500_t w5500;
+  int errors = 0;
+
+  /* Init */
+  picfw_w5500_init(&w5500);
+  errors += expect_true(name, w5500.initialized == PICFW_TRUE, "initialized");
+  errors += expect_true(name,
+      picfw_w5500_read_common(&w5500, PICFW_W5500_VERSIONR) == 0x04u,
+      "chip version 0x04");
+  errors += expect_true(name,
+      w5500.common[PICFW_W5500_RCR] == 0x08u, "default retry count 8");
+
+  /* Null guards */
+  picfw_w5500_init(0); /* no crash */
+  errors += expect_true(name, picfw_w5500_read_common(0, 0u) == 0u,
+                        "read_common null");
+  errors += expect_true(name, picfw_w5500_read_socket(0, 0u) == 0u,
+                        "read_socket null");
+  errors += expect_true(name, picfw_w5500_link_up(0) == PICFW_FALSE,
+                        "link_up null");
+  errors += expect_true(name, picfw_w5500_socket_open_tcp(0, 3333u) == PICFW_FALSE,
+                        "open_tcp null");
+  errors += expect_true(name, picfw_w5500_socket_listen(0) == PICFW_FALSE,
+                        "listen null");
+  picfw_w5500_socket_close(0); /* no crash */
+  picfw_w5500_set_mac(0, (const uint8_t[]){0}); /* no crash */
+  picfw_w5500_set_ip(0, (const uint8_t[]){0}); /* no crash */
+
+  /* Out-of-bounds address */
+  errors += expect_true(name, picfw_w5500_read_common(&w5500, 999u) == 0u,
+                        "read_common OOB");
+  errors += expect_true(name, picfw_w5500_read_socket(&w5500, 999u) == 0u,
+                        "read_socket OOB");
+
+  /* MAC/IP/subnet/gateway */
+  {
+    const uint8_t mac[] = {0xAE, 0xB0, 0x53, 0x01, 0x02, 0x03};
+    const uint8_t ip[] = {192, 168, 1, 100};
+    const uint8_t mask[] = {255, 255, 255, 0};
+    const uint8_t gw[] = {192, 168, 1, 1};
+    picfw_w5500_set_mac(&w5500, mac);
+    picfw_w5500_set_ip(&w5500, ip);
+    picfw_w5500_set_subnet(&w5500, mask);
+    picfw_w5500_set_gateway(&w5500, gw);
+    errors += expect_true(name,
+        w5500.common[PICFW_W5500_SHAR0] == 0xAEu &&
+        w5500.common[PICFW_W5500_SHAR0 + 5u] == 0x03u,
+        "MAC written");
+    errors += expect_true(name,
+        w5500.common[PICFW_W5500_SIPR0] == 192u &&
+        w5500.common[PICFW_W5500_SIPR0 + 3u] == 100u,
+        "IP written");
+    errors += expect_true(name,
+        w5500.common[PICFW_W5500_SUBR0] == 255u, "subnet written");
+    errors += expect_true(name,
+        w5500.common[PICFW_W5500_GAR0] == 192u, "gateway written");
+  }
+
+  /* Link detection */
+  errors += expect_true(name, picfw_w5500_link_up(&w5500) == PICFW_FALSE,
+                        "link down initially");
+  w5500.common[PICFW_W5500_PHYCFGR] = 0x01u;
+  errors += expect_true(name, picfw_w5500_link_up(&w5500) == PICFW_TRUE,
+                        "link up after PHYCFGR bit 0 set");
+
+  /* TCP socket lifecycle: OPEN → INIT → LISTEN → CLOSE */
+  errors += expect_true(name,
+      picfw_w5500_socket_open_tcp(&w5500, PICFW_W5500_EBUSD_PORT) == PICFW_TRUE,
+      "socket open TCP");
+  errors += expect_true(name,
+      picfw_w5500_socket_status(&w5500) == PICFW_W5500_SN_SR_INIT,
+      "socket status INIT after open");
+
+  errors += expect_true(name,
+      picfw_w5500_socket_listen(&w5500) == PICFW_TRUE,
+      "socket listen");
+  errors += expect_true(name,
+      picfw_w5500_socket_status(&w5500) == PICFW_W5500_SN_SR_LISTEN,
+      "socket status LISTEN");
+
+  picfw_w5500_socket_close(&w5500);
+  errors += expect_true(name,
+      picfw_w5500_socket_status(&w5500) == PICFW_W5500_SN_SR_CLOSED,
+      "socket closed");
+
+  /* RX/TX size accessors (default 0) */
+  errors += expect_true(name, picfw_w5500_socket_rx_size(&w5500) == 0u,
+                        "rx_size 0 after init");
+  errors += expect_true(name, picfw_w5500_socket_tx_free(&w5500) == 0u,
+                        "tx_free 0 after init");
+
+  /* HAL integration */
+  {
+    picfw_pic16f15356_hal_t hal;
+    picfw_pic16f15356_hal_runtime_init(&hal);
+    errors += expect_true(name, hal.w5500.initialized == PICFW_TRUE,
+                          "W5500 initialized via HAL");
+    errors += expect_true(name,
+        picfw_w5500_read_common(&hal.w5500, PICFW_W5500_VERSIONR) == 0x04u,
+        "HAL W5500 version");
+  }
+
+  /* Command register auto-clear */
+  picfw_w5500_init(&w5500);
+  picfw_w5500_write_socket(&w5500, PICFW_W5500_SN_MR, PICFW_W5500_SN_MR_TCP);
+  picfw_w5500_write_socket(&w5500, PICFW_W5500_SN_CR, PICFW_W5500_SN_CR_OPEN);
+  errors += expect_true(name,
+      picfw_w5500_read_socket(&w5500, PICFW_W5500_SN_CR) == 0u,
+      "CR auto-cleared after command");
+
+  return errors;
+}
+
 static int test_arbitration_delay_api(void) {
   const char *name = "arbitration_delay_api";
   picfw_runtime_config_t config;
@@ -3503,6 +3618,9 @@ int main(void) {
     return 1;
   }
   if (test_921600_baud_mode() != 0) {
+    return 1;
+  }
+  if (test_w5500_driver() != 0) {
     return 1;
   }
   if (test_arbitration_delay_api() != 0) {
