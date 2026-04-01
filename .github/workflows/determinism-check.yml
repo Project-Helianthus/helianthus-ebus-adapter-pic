@@ -1,0 +1,132 @@
+# ============================================================================
+# Determinism Guard — runs on every PR and push to main
+# Blocks merge if ANY determinism rule is violated
+# ============================================================================
+
+name: Determinism Check
+
+on:
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'runtime/**'
+      - 'bootloader/**'
+      - 'scripts/**'
+      - 'Makefile'
+  push:
+    branches: [main]
+    paths:
+      - 'runtime/**'
+      - 'bootloader/**'
+      - '.github/workflows/**'
+      - 'scripts/**'
+      - 'Makefile'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  NODE_OPTIONS: --no-deprecation
+
+jobs:
+  determinism:
+    name: Determinism Analysis
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: R1 — No Recursion
+        id: recursion
+        run: |
+          python3 scripts/check_no_recursion.py runtime/src runtime/include
+          python3 scripts/check_no_recursion.py bootloader/src bootloader/include
+
+      - name: R2/R7 — No Dynamic Allocation / VLAs
+        id: malloc
+        run: |
+          python3 scripts/check_no_malloc.py runtime/src runtime/include
+          python3 scripts/check_no_malloc.py bootloader/src bootloader/include
+
+      - name: R3 — Bounded Loops
+        id: loops
+        run: |
+          python3 scripts/check_bounded_loops.py runtime/src runtime/include
+          python3 scripts/check_bounded_loops.py bootloader/src bootloader/include
+
+      - name: R6 — No Floating Point
+        id: float
+        run: |
+          python3 scripts/check_no_float.py runtime/src runtime/include
+          python3 scripts/check_no_float.py bootloader/src bootloader/include
+
+      - name: R8 — Cyclomatic Complexity
+        id: complexity
+        run: |
+          python3 scripts/check_complexity.py runtime/src --max=35
+          python3 scripts/check_complexity.py bootloader/src --max=35
+
+      # NOTE: ISR constraints (R4), blocking delays (R5), and WCET checks
+      # are skipped. The firmware uses a HAL simulation model, not
+      # __interrupt() or __delay_ms. These will be added when targeting
+      # real PIC hardware.
+
+      - name: Install cppcheck
+        run: sudo apt-get install -y -qq cppcheck
+
+      - name: Lint
+        id: lint
+        run: make check-lint
+
+      - name: Build and Test
+        run: |
+          make build
+          make test
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: false
+
+      - name: Clone and prepare tinyebus oracle
+        id: tinyebus
+        run: |
+          TINYEBUS_DIR="$(cd ../.. && pwd)/helianthus-tinyebus"
+          git clone --depth 1 https://github.com/Project-Helianthus/helianthus-tinyebus.git \
+            "$TINYEBUS_DIR"
+          if [ -d "$TINYEBUS_DIR/cmd/adapterproto-oracle" ]; then
+            cd "$TINYEBUS_DIR" && go mod tidy
+            echo "oracle_available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::tinyebus cmd/adapterproto-oracle not found — oracle parity check skipped"
+            echo "oracle_available=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Oracle Check
+        if: steps.tinyebus.outputs.oracle_available == 'true'
+        run: make oracle-check
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Determinism Check Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Rule | Check | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| R1 | No Recursion | ${{ steps.recursion.outcome == 'success' && 'PASS' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| R2/R7 | No malloc/VLA | ${{ steps.malloc.outcome == 'success' && 'PASS' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| R3 | Bounded Loops | ${{ steps.loops.outcome == 'success' && 'PASS' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| R6 | No Float | ${{ steps.float.outcome == 'success' && 'PASS' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| R8 | Complexity <35 | ${{ steps.complexity.outcome == 'success' && 'PASS' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Lint | cppcheck | ${{ steps.lint.outcome == 'success' && 'PASS' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "ISR (R4), delays (R5), WCET checks skipped (HAL simulation model)." >> $GITHUB_STEP_SUMMARY

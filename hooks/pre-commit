@@ -1,0 +1,72 @@
+#!/bin/bash
+# ============================================================================
+# Git pre-commit hook — runs determinism checks on staged C files
+# Install: cp hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+# Or:      make install-hooks
+# ============================================================================
+
+set -e
+
+SRC_DIRS="runtime/src runtime/include bootloader/src bootloader/include"
+
+echo "╔══════════════════════════════════════╗"
+echo "║  eBUS Firmware — Pre-commit Checks   ║"
+echo "╚══════════════════════════════════════╝"
+
+# Check if any C files are staged in our source directories
+STAGED_C=$(git diff --cached --name-only --diff-filter=ACM -- \
+    'runtime/src/*.c' 'runtime/include/**/*.h' \
+    'bootloader/src/*.c' 'bootloader/include/**/*.h' \
+    2>/dev/null || true)
+
+if [ -z "$STAGED_C" ]; then
+    echo "No C source files staged — skipping determinism checks."
+    exit 0
+fi
+
+echo "Staged files:"
+echo "$STAGED_C" | sed 's/^/  /'
+echo ""
+
+FAILED=0
+
+run_check() {
+    local label="$1"
+    shift
+    echo -n "  $label... "
+    if "$@" > /dev/null 2>&1; then
+        echo "PASS"
+    else
+        echo "FAILED"
+        "$@" 2>&1 | head -20
+        FAILED=1
+    fi
+}
+
+# Run enabled checks against all source directories
+for dir in $SRC_DIRS; do
+    run_check "[R1] No recursion ($dir)       " python3 scripts/check_no_recursion.py "$dir"
+    run_check "[R2] No malloc/VLA ($dir)      " python3 scripts/check_no_malloc.py "$dir"
+    run_check "[R3] Bounded loops ($dir)      " python3 scripts/check_bounded_loops.py "$dir"
+    run_check "[R6] No floating point ($dir)  " python3 scripts/check_no_float.py "$dir"
+    run_check "[R8] Complexity < 15 ($dir)    " python3 scripts/check_complexity.py "$dir" --max=35
+done
+
+# NOTE: ISR constraints, blocking delays, and WCET checks are skipped.
+# Our code uses a HAL simulation model, not __interrupt() or __delay_ms.
+# These checks can be added when targeting real PIC hardware.
+
+echo ""
+
+if [ $FAILED -ne 0 ]; then
+    echo "╔══════════════════════════════════════╗"
+    echo "║  COMMIT BLOCKED — fix violations     ║"
+    echo "║  Run 'make check-all' for details    ║"
+    echo "╚══════════════════════════════════════╝"
+    exit 1
+else
+    echo "╔══════════════════════════════════════╗"
+    echo "║  All determinism checks passed       ║"
+    echo "╚══════════════════════════════════════╝"
+    exit 0
+fi

@@ -1,0 +1,8 @@
+build/
+*.o
+*.p1
+*.hex
+*.elf
+__pycache__/
+*.pyc
+.DS_Store
