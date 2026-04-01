@@ -144,9 +144,10 @@ void picfw_pic16f15356_hal_runtime_init(picfw_pic16f15356_hal_t *hal) {
   /* PPS routing for EUSART1/2 */
   picfw_pic16f15356_hal_configure_pps(hal);
 
-  /* Initialize LED and EEPROM */
+  /* Initialize LED, EEPROM, and W5500 */
   picfw_led_init(&hal->led);
   picfw_eeprom_init(&hal->eeprom);
+  picfw_w5500_init(&hal->w5500);
 
   /* Simulation defaults: pull-up high on strap and signal-detect inputs */
   hal->latches.porta_input = 0x33u; /* RA0,RA1,RA4,RA5 high (straps open) */

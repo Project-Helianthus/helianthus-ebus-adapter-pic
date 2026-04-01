@@ -4,6 +4,7 @@
 #include "eeprom.h"
 #include "led.h"
 #include "runtime.h"
+#include "w5500.h"
 
 #define PICFW_PIC16F15356_ISR_LATCH_CAP 16u
 #define PICFW_PIC16F15356_MAINLINE_BYTE_BUDGET 8u
@@ -93,6 +94,7 @@ typedef struct picfw_pic16f15356_hal {
   picfw_pic16f15356_uart_mode_t uart_mode;
   picfw_led_t led;
   picfw_eeprom_t eeprom;
+  picfw_w5500_t w5500;
   picfw_bool_t wifi_variant;  /* cached from strap decode at init */
   picfw_bool_t wifi_ready;    /* Wemos readiness: RB0 driven HIGH */
   picfw_bool_t bootloader_entry; /* J11 PGC+PGD both LOW at POR */
