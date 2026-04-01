@@ -48,6 +48,12 @@
 #define PICFW_PIN_LED2_PORT PICFW_PORT_C
 #define PICFW_PIN_LED2_BIT  6u
 
+/* J11 ICSP bootloader entry: RB6 (PGC) + RB7 (PGD) shorted at POR */
+#define PICFW_PIN_J11_PGC_PORT PICFW_PORT_B
+#define PICFW_PIN_J11_PGC_BIT  6u
+#define PICFW_PIN_J11_PGD_PORT PICFW_PORT_B
+#define PICFW_PIN_J11_PGD_BIT  7u
+
 /* WiFi-check: RB0 (J12 Pin 4, Wemos D1 mini readiness signal) */
 #define PICFW_PIN_WIFI_CHECK_PORT PICFW_PORT_B
 #define PICFW_PIN_WIFI_CHECK_BIT  0u

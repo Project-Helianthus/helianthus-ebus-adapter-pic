@@ -92,6 +92,7 @@ typedef struct picfw_pic16f15356_hal {
   picfw_led_t led;
   picfw_bool_t wifi_variant;  /* cached from strap decode at init */
   picfw_bool_t wifi_ready;    /* Wemos readiness: RB0 driven HIGH */
+  picfw_bool_t bootloader_entry; /* J11 PGC+PGD both LOW at POR */
 } picfw_pic16f15356_hal_t;
 
 /* J12 AUX strap configuration (active-low: open=high, GND=low) */
