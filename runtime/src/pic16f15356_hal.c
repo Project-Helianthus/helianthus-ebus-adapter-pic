@@ -149,9 +149,11 @@ void picfw_pic16f15356_hal_runtime_init(picfw_pic16f15356_hal_t *hal) {
   hal->latches.porta_input = 0x33u; /* RA0,RA1,RA4,RA5 high (straps open) */
   hal->latches.portb_input = 0xC2u; /* RB1=1(signal), RB6=1(PGC), RB7=1(PGD) */
 
-  /* J11 bootloader entry detection: read RB6 (PGC) + RB7 (PGD) BEFORE
-   * PPS/SPI config reconfigures these pins.  Both LOW (shorted by J11
-   * jumper) = enter bootloader mode instead of application.
+  /* J11 bootloader entry detection: read RB6 (PGC) + RB7 (PGD).
+   * Both LOW (shorted by J11 jumper) = enter bootloader mode.
+   * Note: in the simulation, this runs after PPS config (which does not
+   * touch RB6/RB7).  On real hardware, the read is the first GPIO
+   * operation at POR, before any peripheral configuration.
    * On real hardware, this is the first GPIO read at POR.  In simulation,
    * portb_input defaults to 0xC2 (normal boot, RB6+RB7 HIGH).  Tests
    * verify the detection logic via direct read_pin calls after init. */
