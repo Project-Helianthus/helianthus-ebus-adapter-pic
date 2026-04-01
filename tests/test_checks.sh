@@ -66,6 +66,15 @@ expect_pass "R8 Complexity"          python3 scripts/check_complexity.py runtime
 expect_pass "STACK Depth"            python3 scripts/check_stack_depth.py runtime/src runtime/include --max-depth=14
 expect_pass "R10 Buffers"            python3 scripts/check_buffer_sizes.py runtime/src runtime/include
 expect_pass "GUARD Headers"          python3 scripts/check_include_guards.py runtime/include
+expect_pass "WCET ISR-context"       python3 scripts/check_wcet_isr.py runtime/src runtime/include --max-cycles=60
+expect_pass "CONST dispatch"         python3 scripts/check_const_dispatch.py runtime/src runtime/include
+# RAM budget: requires build/check_ram_budget binary (run 'make build' first).
+# The binary is built by the Makefile, not by this test script.
+if [ -x build/check_ram_budget ]; then
+    expect_pass "RAM budget"         ./build/check_ram_budget
+else
+    yellow "  SKIP RAM budget (binary not built — run 'make check-ram-budget' first)"
+fi
 echo ""
 
 # --- Test against GOOD code (bootloader/src) ---
@@ -78,6 +87,8 @@ expect_pass "R8 Complexity"          python3 scripts/check_complexity.py bootloa
 expect_pass "STACK Depth"            python3 scripts/check_stack_depth.py bootloader/src bootloader/include --max-depth=14
 expect_pass "R10 Buffers"            python3 scripts/check_buffer_sizes.py bootloader/src bootloader/include
 expect_pass "GUARD Headers"          python3 scripts/check_include_guards.py bootloader/include
+expect_pass "WCET ISR-context"       python3 scripts/check_wcet_isr.py bootloader/src bootloader/include --max-cycles=60
+expect_pass "CONST dispatch"         python3 scripts/check_const_dispatch.py bootloader/src bootloader/include
 echo ""
 
 # --- Test against BAD code (tests/fixtures/) ---
@@ -90,6 +101,9 @@ expect_fail "R8 High complexity"     python3 scripts/check_complexity.py tests/f
 expect_fail "STACK Deep chain"       python3 scripts/check_stack_depth.py tests/fixtures/ --max-depth=14
 expect_fail "R10 Bad ring"           python3 scripts/check_buffer_sizes.py tests/fixtures/
 expect_fail "GUARD No guard"         python3 scripts/check_include_guards.py tests/fixtures/
+expect_fail "WCET ISR loop"          python3 scripts/check_wcet_isr.py tests/fixtures/ --max-cycles=60
+expect_fail "CONST mutable fptr"     python3 scripts/check_const_dispatch.py tests/fixtures/
+# RAM budget: no sensible bad fixture (checks struct sizes, not source patterns)
 echo ""
 
 # --- Summary ---

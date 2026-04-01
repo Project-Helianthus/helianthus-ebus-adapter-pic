@@ -92,10 +92,22 @@ jobs:
           python3 scripts/check_include_guards.py runtime/include
           python3 scripts/check_include_guards.py bootloader/include
 
-      # NOTE: ISR constraints (R4), blocking delays (R5), and WCET checks
-      # are skipped. The firmware uses a HAL simulation model, not
-      # __interrupt() or __delay_ms. These will be added when targeting
-      # real PIC hardware.
+      - name: RAM — Static Struct Budget
+        id: ram
+        run: |
+          make check-ram-budget
+
+      - name: WCET — ISR-Context Cycle Budget
+        id: wcet
+        run: |
+          python3 scripts/check_wcet_isr.py runtime/src runtime/include --max-cycles=60
+          python3 scripts/check_wcet_isr.py bootloader/src bootloader/include --max-cycles=60
+
+      - name: CONST — Dispatch Table Qualifiers
+        id: const_dispatch
+        run: |
+          python3 scripts/check_const_dispatch.py runtime/src runtime/include
+          python3 scripts/check_const_dispatch.py bootloader/src bootloader/include
 
       - name: Install cppcheck
         run: sudo apt-get install -y -qq cppcheck
@@ -148,6 +160,9 @@ jobs:
           echo "| STACK | Call Depth <14 | ${{ steps.stack.outcome == 'success' && 'PASS' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| R10 | Buffer Sizes | ${{ steps.buffers.outcome == 'success' && 'PASS' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| GUARD | Include Guards | ${{ steps.guards.outcome == 'success' && 'PASS' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| RAM | Struct Budget | ${{ steps.ram.outcome == 'success' && 'PASS' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| WCET | ISR Cycles <60 | ${{ steps.wcet.outcome == 'success' && 'PASS' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| CONST | Dispatch Qualifiers | ${{ steps.const_dispatch.outcome == 'success' && 'PASS' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Lint | cppcheck | ${{ steps.lint.outcome == 'success' && 'PASS' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "ISR (R4), delays (R5), WCET checks skipped (HAL simulation model)." >> $GITHUB_STEP_SUMMARY
+          echo "Blocking delays (R5) check skipped (HAL simulation model). WCET enforced via ISR naming patterns." >> $GITHUB_STEP_SUMMARY

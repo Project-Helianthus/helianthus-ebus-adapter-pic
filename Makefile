@@ -28,11 +28,13 @@ MAX_ISR_CYCLES := 60
 .PHONY: build test oracle-check clean \
         check-all check-recursion check-malloc check-loops check-float check-complexity \
         check-stack-depth check-buffers check-guards \
+        check-ram-budget check-wcet-isr check-const-dispatch \
         check-lint check-isr check-delays check-wcet install-hooks
 
 ## Run all determinism checks (enabled subset)
 check-all: check-recursion check-malloc check-loops check-float check-complexity \
-           check-stack-depth check-buffers check-guards check-lint
+           check-stack-depth check-buffers check-guards \
+           check-ram-budget check-wcet-isr check-const-dispatch check-lint
 	@echo ""
 	@echo "============================================"
 	@echo "  ALL DETERMINISM CHECKS PASSED"
@@ -77,6 +79,30 @@ check-buffers:
 check-guards:
 	@echo "--- [GUARD] Include guards ---"
 	@$(PYTHON) scripts/check_include_guards.py $(SRC_DIRS)
+
+## RAM: Static struct size budget (PIC16F15356: 2048 bytes)
+RAM_BUDGET_SRC := tools/check_ram_budget.c
+RAM_BUDGET_BIN := $(BUILD_DIR)/check_ram_budget
+
+$(RAM_BUDGET_BIN): | $(BUILD_STAMP)
+$(RAM_BUDGET_BIN): $(RAM_BUDGET_SRC) $(wildcard runtime/include/picfw/*.h)
+	$(CC) $(CFLAGS) $(RUNTIME_INCLUDES) $(RAM_BUDGET_SRC) -o "$@"
+
+check-ram-budget: $(RAM_BUDGET_BIN)
+	@echo "--- [RAM] Static RAM budget ---"
+	@"./$(RAM_BUDGET_BIN)"
+
+## WCET: ISR-context function cycle budget
+check-wcet-isr:
+	@echo "--- [WCET] ISR-context cycle budget ---"
+	@$(PYTHON) scripts/check_wcet_isr.py runtime/src runtime/include --max-cycles=$(MAX_ISR_CYCLES)
+	@$(PYTHON) scripts/check_wcet_isr.py bootloader/src bootloader/include --max-cycles=$(MAX_ISR_CYCLES)
+
+## CONST: Function pointer arrays must be const
+check-const-dispatch:
+	@echo "--- [CONST] Dispatch table qualifiers ---"
+	@$(PYTHON) scripts/check_const_dispatch.py runtime/src runtime/include
+	@$(PYTHON) scripts/check_const_dispatch.py bootloader/src bootloader/include
 
 ## Lint: cppcheck static analysis
 check-lint:

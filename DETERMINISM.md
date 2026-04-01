@@ -19,7 +19,7 @@ The checks scan these directories:
 | R1 | No recursion (direct or mutual) | Yes | Call graph cycle detection |
 | R2 | No malloc/calloc/realloc/free | Yes | Pattern scan |
 | R3 | All loops bounded by constant or decrementing guard | Yes | AST pattern analysis |
-| R4 | ISR constraints (no loops/fptrs/library calls) | Skipped* | ISR body analysis + WCET |
+| R4 | ISR-context WCET < 60 cycles | Yes | Naming pattern + source heuristic |
 | R5 | No __delay in critical paths | Skipped* | Context-aware scan |
 | R6 | No float/double/math.h | Yes | Pattern scan |
 | R7 | No variable-length arrays | Yes | Pattern scan (with R2) |
@@ -28,8 +28,11 @@ The checks scan these directories:
 | R10 | Ring buffers power-of-2, bitmask indexing | Yes | Buffer size + modulo scan |
 | STACK | Call depth < 14 (16-level HW stack) | Yes | Call graph DFS |
 | GUARD | Header include guards | Yes | Pattern scan |
+| RAM | Static struct footprint < 75% of 2KB | Yes | Host sizeof budget check |
+| WCET | ISR-context functions < 60 cycles | Yes | Source heuristic (naming pattern) |
+| CONST | Function pointer arrays must be const | Yes | Qualifier scan |
 
-*R4/R5 checks are available as optional make targets but skipped in `check-all` because the firmware uses a HAL simulation model, not `__interrupt()` or `__delay_ms`. These will be enabled when targeting real PIC hardware.
+*R5 blocking delay check is available as an optional make target but skipped in `check-all` because the firmware uses a HAL simulation model without `__delay_ms`. R4 ISR constraints are now covered by `check-wcet-isr` using naming patterns (`*_isr_*`) instead of `__interrupt()`.
 
 ## Running Checks Locally
 
@@ -46,6 +49,9 @@ make check-complexity
 make check-stack-depth
 make check-buffers
 make check-guards
+make check-ram-budget
+make check-wcet-isr
+make check-const-dispatch
 
 # Optional checks (XC8/hardware-specific, not in check-all)
 make check-isr

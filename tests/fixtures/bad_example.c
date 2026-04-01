@@ -169,3 +169,15 @@ void bad_ring_push(uint8_t v) {
     bad_ring[bad_idx] = v;
     bad_idx = (bad_idx + 1) % BAD_RING_CAP;
 }
+
+/* WCET: ISR-context function with a loop — should blow the budget */
+void bad_isr_latch_example(uint8_t byte) {
+    uint8_t i;
+    for (i = 0; i < 10; i++) {
+        /* loop in ISR-context = WCET violation */
+    }
+}
+
+/* CONST: mutable function pointer array — should be const */
+typedef void (*bad_handler_t)(void);
+bad_handler_t bad_dispatch_table[] = { bad_ring_push };
