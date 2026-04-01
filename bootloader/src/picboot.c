@@ -313,6 +313,7 @@ void picboot_bootloader_init_with_metadata(picboot_bootloader_t *bootloader, con
     bootloader->application_running = false;
     bootloader->application_entry = PICBOOT_APPLICATION_ENTRY;
     bootloader->reset_counter = 0u;
+    bootloader->led_active = true; /* LED2 bright on bootloader entry */
     picboot_frame_clear(&bootloader->parser.current);
 }
 
