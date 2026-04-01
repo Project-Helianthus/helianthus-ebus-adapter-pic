@@ -2823,6 +2823,17 @@ static int test_led_state_machine(void) {
   out = picfw_led_service(&led, now + PICFW_LED_PING_PERIOD_MS, 0u);
   errors += expect_true(name, led.state == PICFW_LED_PING,
                         "LOW -> PING after 4s");
+  /* Verify PING returns to LOW (not NORMAL) */
+  out = picfw_led_service(&led, now + PICFW_LED_PING_PERIOD_MS +
+                                PICFW_LED_PING_DURATION_MS, 0u);
+  errors += expect_true(name, led.state == PICFW_LED_LOW,
+                        "PING -> LOW (not NORMAL)");
+
+  /* Out-of-range state: bounds check returns FALSE */
+  led.state = 99u;
+  out = picfw_led_service(&led, now, 0u);
+  errors += expect_true(name, out == PICFW_FALSE,
+                        "out-of-range state returns false");
 
   /* BRIGHT via INIT flag: 2 seconds */
   now = 30000u;
