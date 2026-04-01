@@ -26,10 +26,6 @@ permissions:
   contents: read
   pull-requests: write
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  NODE_OPTIONS: --no-deprecation
-
 jobs:
   determinism:
     name: Determinism Analysis
@@ -37,10 +33,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -71,13 +67,43 @@ jobs:
       - name: R8 — Cyclomatic Complexity
         id: complexity
         run: |
-          python3 scripts/check_complexity.py runtime/src --max=35
-          python3 scripts/check_complexity.py bootloader/src --max=35
+          python3 scripts/check_complexity.py runtime/src --max=10
+          python3 scripts/check_complexity.py bootloader/src --max=10
 
-      # NOTE: ISR constraints (R4), blocking delays (R5), and WCET checks
-      # are skipped. The firmware uses a HAL simulation model, not
-      # __interrupt() or __delay_ms. These will be added when targeting
-      # real PIC hardware.
+      - name: STACK — Call Stack Depth
+        id: stack
+        run: |
+          python3 scripts/check_stack_depth.py runtime/src runtime/include --max-depth=13
+          python3 scripts/check_stack_depth.py bootloader/src bootloader/include --max-depth=13
+
+      - name: R10 — Buffer Sizes
+        id: buffers
+        run: |
+          python3 scripts/check_buffer_sizes.py runtime/src runtime/include
+          python3 scripts/check_buffer_sizes.py bootloader/src bootloader/include
+
+      - name: GUARD — Include Guards
+        id: guards
+        run: |
+          python3 scripts/check_include_guards.py runtime/include
+          python3 scripts/check_include_guards.py bootloader/include
+
+      - name: RAM — Static Struct Budget
+        id: ram
+        run: |
+          make check-ram-budget
+
+      - name: WCET — ISR-Context Cycle Budget
+        id: wcet
+        run: |
+          python3 scripts/check_wcet_isr.py runtime/src runtime/include --max-cycles=60
+          python3 scripts/check_wcet_isr.py bootloader/src bootloader/include --max-cycles=60
+
+      - name: CONST — Dispatch Table Qualifiers
+        id: const_dispatch
+        run: |
+          python3 scripts/check_const_dispatch.py runtime/src runtime/include
+          python3 scripts/check_const_dispatch.py bootloader/src bootloader/include
 
       - name: Install cppcheck
         run: sudo apt-get install -y -qq cppcheck
@@ -92,7 +118,7 @@ jobs:
           make test
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: '1.24'
           cache: false
@@ -126,7 +152,13 @@ jobs:
           echo "| R2/R7 | No malloc/VLA | ${{ steps.malloc.outcome == 'success' && 'PASS' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| R3 | Bounded Loops | ${{ steps.loops.outcome == 'success' && 'PASS' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| R6 | No Float | ${{ steps.float.outcome == 'success' && 'PASS' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| R8 | Complexity <35 | ${{ steps.complexity.outcome == 'success' && 'PASS' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| R8 | Complexity <10 | ${{ steps.complexity.outcome == 'success' && 'PASS' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| STACK | Call Depth <14 | ${{ steps.stack.outcome == 'success' && 'PASS' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| R10 | Buffer Sizes | ${{ steps.buffers.outcome == 'success' && 'PASS' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| GUARD | Include Guards | ${{ steps.guards.outcome == 'success' && 'PASS' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| RAM | Struct Budget | ${{ steps.ram.outcome == 'success' && 'PASS' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| WCET | ISR Cycles <60 | ${{ steps.wcet.outcome == 'success' && 'PASS' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| CONST | Dispatch Qualifiers | ${{ steps.const_dispatch.outcome == 'success' && 'PASS' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Lint | cppcheck | ${{ steps.lint.outcome == 'success' && 'PASS' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "ISR (R4), delays (R5), WCET checks skipped (HAL simulation model)." >> $GITHUB_STEP_SUMMARY
+          echo "Blocking delays (R5) check skipped (HAL simulation model). WCET enforced via ISR naming patterns." >> $GITHUB_STEP_SUMMARY

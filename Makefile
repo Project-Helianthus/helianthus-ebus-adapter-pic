@@ -19,19 +19,22 @@ PICBOOT_JSON := $(BUILD_DIR)/picboot_oracle_check.json
 # --- Determinism Checks ---
 SRC_DIRS := runtime/src runtime/include bootloader/src bootloader/include
 PYTHON := python3
-# Threshold raised from 15 to 35 to accommodate FSM dispatchers and protocol
-# validation functions (e.g. picboot_request_is_structurally_valid CC=34,
-# picfw_runtime_protocol_state_dispatch CC=22, picfw_runtime_continue_scan_fsm CC=18).
-# These functions use large switch/if structures inherent to protocol parsing.
-MAX_COMPLEXITY := 35
+# Threshold lowered from 35 to 10 after refactoring FSM dispatchers and
+# protocol validation into const dispatch tables and sub-handler functions.
+# Peak CC after refactoring: 9 (four functions tied).
+MAX_COMPLEXITY := 10
 MAX_ISR_CYCLES := 60
 
 .PHONY: build test oracle-check clean \
         check-all check-recursion check-malloc check-loops check-float check-complexity \
+        check-stack-depth check-buffers check-guards \
+        check-ram-budget check-wcet-isr check-const-dispatch \
         check-lint check-isr check-delays check-wcet install-hooks
 
 ## Run all determinism checks (enabled subset)
-check-all: check-recursion check-malloc check-loops check-float check-complexity check-lint
+check-all: check-recursion check-malloc check-loops check-float check-complexity \
+           check-stack-depth check-buffers check-guards \
+           check-ram-budget check-wcet-isr check-const-dispatch check-lint
 	@echo ""
 	@echo "============================================"
 	@echo "  ALL DETERMINISM CHECKS PASSED"
@@ -62,6 +65,45 @@ check-complexity:
 	@echo "--- [R8] Cyclomatic complexity ---"
 	@$(PYTHON) scripts/check_complexity.py $(SRC_DIRS) --max=$(MAX_COMPLEXITY)
 
+## STACK: PIC16 call stack depth limit (max 14 of 16 levels)
+check-stack-depth:
+	@echo "--- [STACK] Call stack depth ---"
+	@$(PYTHON) scripts/check_stack_depth.py $(SRC_DIRS) --max-depth=13
+
+## R10: Ring buffer sizes (power-of-2) and bitmask indexing
+check-buffers:
+	@echo "--- [R10] Buffer sizes and indexing ---"
+	@$(PYTHON) scripts/check_buffer_sizes.py $(SRC_DIRS)
+
+## GUARD: Header include guards
+check-guards:
+	@echo "--- [GUARD] Include guards ---"
+	@$(PYTHON) scripts/check_include_guards.py $(SRC_DIRS)
+
+## RAM: Static struct size budget (PIC16F15356: 2048 bytes)
+RAM_BUDGET_SRC := tools/check_ram_budget.c
+RAM_BUDGET_BIN := $(BUILD_DIR)/check_ram_budget
+
+$(RAM_BUDGET_BIN): | $(BUILD_STAMP)
+$(RAM_BUDGET_BIN): $(RAM_BUDGET_SRC) $(wildcard runtime/include/picfw/*.h)
+	$(CC) $(CFLAGS) $(RUNTIME_INCLUDES) $(RAM_BUDGET_SRC) -o "$@"
+
+check-ram-budget: $(RAM_BUDGET_BIN)
+	@echo "--- [RAM] Static RAM budget ---"
+	@"./$(RAM_BUDGET_BIN)"
+
+## WCET: ISR-context function cycle budget
+check-wcet-isr:
+	@echo "--- [WCET] ISR-context cycle budget ---"
+	@$(PYTHON) scripts/check_wcet_isr.py runtime/src runtime/include --max-cycles=$(MAX_ISR_CYCLES)
+	@$(PYTHON) scripts/check_wcet_isr.py bootloader/src bootloader/include --max-cycles=$(MAX_ISR_CYCLES)
+
+## CONST: Function pointer arrays must be const
+check-const-dispatch:
+	@echo "--- [CONST] Dispatch table qualifiers ---"
+	@$(PYTHON) scripts/check_const_dispatch.py runtime/src runtime/include
+	@$(PYTHON) scripts/check_const_dispatch.py bootloader/src bootloader/include
+
 ## Lint: cppcheck static analysis
 check-lint:
 	@echo "--- [LINT] cppcheck ---"
@@ -69,6 +111,7 @@ check-lint:
 		--suppress=missingIncludeSystem \
 		--suppress=knownConditionTrueFalse \
 		--suppress=objectIndex \
+		--suppress=constParameterCallback \
 		--error-exitcode=1 \
 		--inline-suppr \
 		-I runtime/include -I bootloader/include \

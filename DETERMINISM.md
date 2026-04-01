@@ -19,15 +19,20 @@ The checks scan these directories:
 | R1 | No recursion (direct or mutual) | Yes | Call graph cycle detection |
 | R2 | No malloc/calloc/realloc/free | Yes | Pattern scan |
 | R3 | All loops bounded by constant or decrementing guard | Yes | AST pattern analysis |
-| R4 | ISR constraints (no loops/fptrs/library calls) | Skipped* | ISR body analysis + WCET |
+| R4 | ISR-context WCET < 60 cycles | Yes | Naming pattern + source heuristic |
 | R5 | No __delay in critical paths | Skipped* | Context-aware scan |
 | R6 | No float/double/math.h | Yes | Pattern scan |
 | R7 | No variable-length arrays | Yes | Pattern scan (with R2) |
-| R8 | Cyclomatic complexity < 35 per function | Yes | Decision point counting |
+| R8 | Cyclomatic complexity < 10 per function | Yes | Decision point counting |
 | R9 | Hardware timers for temporal decisions | Manual | Code review |
-| R10 | Ring buffers power-of-2, bitmask indexing | Manual | Code review |
+| R10 | Ring buffers power-of-2, bitmask indexing | Yes | Buffer size + modulo scan |
+| STACK | Call depth < 13 (16-level HW stack, 3 for ISR) | Yes | Call graph DFS |
+| GUARD | Header include guards | Yes | Pattern scan |
+| RAM | Static struct footprint < 75% of 2KB | Yes | Host sizeof budget check |
+| WCET | ISR-context functions < 60 cycles | Yes | Source heuristic (naming pattern) |
+| CONST | Function pointer arrays must be const | Yes | Qualifier scan |
 
-*R4/R5 checks are available as optional make targets but skipped in `check-all` because the firmware uses a HAL simulation model, not `__interrupt()` or `__delay_ms`. These will be enabled when targeting real PIC hardware.
+*R5 blocking delay check is available as an optional make target but skipped in `check-all` because the firmware uses a HAL simulation model without `__delay_ms`. R4 ISR constraints are now covered by `check-wcet-isr` using naming patterns (`*_isr_*`) instead of `__interrupt()`.
 
 ## Running Checks Locally
 
@@ -41,6 +46,12 @@ make check-malloc
 make check-loops
 make check-float
 make check-complexity
+make check-stack-depth
+make check-buffers
+make check-guards
+make check-ram-budget
+make check-wcet-isr
+make check-const-dispatch
 
 # Optional checks (XC8/hardware-specific, not in check-all)
 make check-isr
@@ -66,10 +77,30 @@ make install-hooks
 
 The **only** permitted exception to R3 (bounded loops) is the single `while(1)` main superloop in `main()`.
 
-The R8 complexity threshold is set to 35 (rather than the pipeline default of 15) to accommodate FSM dispatchers and protocol validation functions that naturally have high cyclomatic complexity due to large switch/if structures. Current high-complexity functions:
-- `picboot_request_is_structurally_valid()` CC=34 -- protocol message validation
-- `picfw_runtime_protocol_state_dispatch()` CC=22 -- FSM state dispatcher
-- `picfw_runtime_continue_scan_fsm()` CC=18 -- bus scan FSM
-- `picboot_bootloader_process_request()` CC=16 -- bootloader command dispatcher
+### R8: Flat State Machine Architecture
+The eBUS protocol FSM must be implemented as a flat `switch/case` on an enum state variable. Maximum nesting depth: 2 levels (switch inside switch).
+
+**Prohibited patterns:**
+- Mutable function pointer dispatch (runtime-assigned callbacks)
+- Coroutine-like patterns, setjmp/longjmp
+- Callback chains where the next handler is determined at runtime
+
+**Permitted patterns:**
+- `const` dispatch tables with validated index -- these provide O(1) deterministic dispatch with constant WCET, superior to large switch/case cascades
+- Static `const` function pointer arrays (placed in ROM by the compiler; the `const` qualifier prevents mutation)
 
 No other exceptions exist. If a rule seems too restrictive for your use case, the code design needs to change -- not the rule.
+
+### STACK: Frozen Call Path
+
+The deepest mainline call chain (13 levels) runs through the scan FSM retry path:
+
+```
+app_mainline_service → mainline_service → runtime_step →
+  service_periodic_status → try_emit_variant → emit_periodic_variant →
+    continue_scan_window → continue_scan_fsm → continue_fsm_phase_retry →
+      protocol_state_dispatch → dispatch_flags_retry →
+        set_protocol_state_ready → set_protocol_state
+```
+
+**Do not add function call levels on this path.** The PIC16F15356 has a 16-level hardware call stack. Budget: 13 mainline + 3 ISR (deepest ISR chain: `app_isr_host_rx → isr_latch_host_rx → byte_fifo_push`) = 16. Zero margin. If you must refactor code here, inline a deeper helper to recover a level first.

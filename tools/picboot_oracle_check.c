@@ -230,6 +230,81 @@ static int check_frame_validation(picboot_bootloader_t *bootloader) {
         return 1;
     }
 
+    /* --- Systematic negative tests for every validation rule entry --- */
+
+    /* ERASE_FLASH (3): min=1 -> reject data_length=0 */
+    request = picboot_make_request(PICBOOT_ERASE_FLASH, PICBOOT_END_BOOT, 0u, NULL, 0u);
+    make_unlock_request(&request);
+    if (picboot_bootloader_process_request(bootloader, &request, &response)) {
+        fprintf(stderr, "[FAIL] %s: erase_flash zero length accepted\n", name);
+        return 1;
+    }
+    if (expect_error_status(name, &response, PICBOOT_ERROR_INVALID_COMMAND)) {
+        return 1;
+    }
+
+    /* READ_EE_DATA (4): min=1 -> reject data_length=0 */
+    request = picboot_make_request(PICBOOT_READ_EE_DATA, 0u, 0u, NULL, 0u);
+    if (picboot_bootloader_process_request(bootloader, &request, &response)) {
+        fprintf(stderr, "[FAIL] %s: read_ee_data zero length accepted\n", name);
+        return 1;
+    }
+    if (expect_error_status(name, &response, PICBOOT_ERROR_INVALID_COMMAND)) {
+        return 1;
+    }
+
+    /* WRITE_EE_DATA (5): min=1 -> reject data_length=0 */
+    request = picboot_make_request(PICBOOT_WRITE_EE_DATA, 0u, 0u, NULL, 0u);
+    make_unlock_request(&request);
+    if (picboot_bootloader_process_request(bootloader, &request, &response)) {
+        fprintf(stderr, "[FAIL] %s: write_ee_data zero length accepted\n", name);
+        return 1;
+    }
+    if (expect_error_status(name, &response, PICBOOT_ERROR_INVALID_COMMAND)) {
+        return 1;
+    }
+
+    /* READ_CONFIG (6): min=1 -> reject data_length=0 */
+    request = picboot_make_request(PICBOOT_READ_CONFIG, 0u, 0u, NULL, 0u);
+    if (picboot_bootloader_process_request(bootloader, &request, &response)) {
+        fprintf(stderr, "[FAIL] %s: read_config zero length accepted\n", name);
+        return 1;
+    }
+    if (expect_error_status(name, &response, PICBOOT_ERROR_INVALID_COMMAND)) {
+        return 1;
+    }
+
+    /* WRITE_CONFIG (7): min=1 -> reject data_length=0 */
+    request = picboot_make_request(PICBOOT_WRITE_CONFIG, 0u, 0u, NULL, 0u);
+    make_unlock_request(&request);
+    if (picboot_bootloader_process_request(bootloader, &request, &response)) {
+        fprintf(stderr, "[FAIL] %s: write_config zero length accepted\n", name);
+        return 1;
+    }
+    if (expect_error_status(name, &response, PICBOOT_ERROR_INVALID_COMMAND)) {
+        return 1;
+    }
+
+    /* CALC_CHECKSUM (8): needs_even -> reject odd length */
+    request = picboot_make_request(PICBOOT_CALC_CHECKSUM, PICBOOT_END_BOOT, 3u, NULL, 0u);
+    if (picboot_bootloader_process_request(bootloader, &request, &response)) {
+        fprintf(stderr, "[FAIL] %s: odd-length checksum accepted\n", name);
+        return 1;
+    }
+    if (expect_error_status(name, &response, PICBOOT_ERROR_INVALID_COMMAND)) {
+        return 1;
+    }
+
+    /* CALC_CRC (10): needs_even -> reject odd length */
+    request = picboot_make_request(PICBOOT_CALC_CRC, PICBOOT_END_BOOT, 3u, NULL, 0u);
+    if (picboot_bootloader_process_request(bootloader, &request, &response)) {
+        fprintf(stderr, "[FAIL] %s: odd-length crc accepted\n", name);
+        return 1;
+    }
+    if (expect_error_status(name, &response, PICBOOT_ERROR_INVALID_COMMAND)) {
+        return 1;
+    }
+
     return 0;
 }
 
@@ -486,6 +561,59 @@ static int check_stream_parser(void) {
     }
     response_len = picboot_frame_serialize_with_stx(&response, response_wire, sizeof(response_wire));
     if (response_len == 0u || response_wire[0] != PICBOOT_STX) {
+        return 4;
+    }
+    return 0;
+}
+
+/* Feed a WRITE_FLASH command byte-by-byte through the stream parser.
+ * Exercises picboot_feed_payload (the payload-accumulation path). */
+static int check_stream_parser_with_payload(void) {
+    picboot_bootloader_t bootloader;
+    picboot_frame_t response;
+    /* WRITE_FLASH: command=2, data_length=4 (LE), unlock=55/AA,
+     * address=PICBOOT_END_BOOT (0x0400 -> l=0x00,h=0x04,u=0x00),
+     * then 4 payload bytes. */
+    const uint8_t raw_request[] = {
+        PICBOOT_STX,
+        0x02u,              /* command = WRITE_FLASH */
+        0x04u, 0x00u,       /* data_length = 4 (LE) */
+        0x55u,              /* ee_key_1 (unlock) */
+        0xAAu,              /* ee_key_2 (unlock) */
+        0x00u,              /* address_l */
+        0x04u,              /* address_h  (0x0400 = END_BOOT) */
+        0x00u,              /* address_u */
+        0x00u,              /* address_unused */
+        /* payload (4 bytes) */
+        0x11u, 0x22u, 0x33u, 0x44u,
+    };
+    size_t index;
+    picboot_feed_result_t result;
+
+    picboot_bootloader_init(&bootloader);
+    picboot_frame_clear(&response);
+    result = PICBOOT_FEED_NEED_MORE;
+    for (index = 0u; index < sizeof(raw_request); ++index) {
+        result = picboot_bootloader_feed(&bootloader, raw_request[index], &response);
+    }
+    if (result != PICBOOT_FEED_FRAME_READY) {
+        fprintf(stderr, "[FAIL] stream_parser_payload: expected FRAME_READY, got %d\n", (int)result);
+        return 1;
+    }
+    if (response.header.command != PICBOOT_WRITE_FLASH) {
+        fprintf(stderr, "[FAIL] stream_parser_payload: wrong command %u\n",
+                (unsigned)response.header.command);
+        return 2;
+    }
+    if (response.header.data_length != 1u || response.header.data[0] != PICBOOT_COMMAND_SUCCESS) {
+        fprintf(stderr, "[FAIL] stream_parser_payload: expected success, got status %u\n",
+                (unsigned)response.header.data[0]);
+        return 3;
+    }
+    /* Verify the payload was actually written to flash */
+    if (bootloader.flash[PICBOOT_END_BOOT * 2u] != 0x11u ||
+        bootloader.flash[PICBOOT_END_BOOT * 2u + 1u] != 0x22u) {
+        fprintf(stderr, "[FAIL] stream_parser_payload: flash not written\n");
         return 4;
     }
     return 0;
@@ -773,6 +901,12 @@ int main(int argc, char **argv) {
     rc = check_stream_parser();
     if (rc != 0) {
         fprintf(stderr, "stream parser check failed: %d\n", rc);
+        return rc;
+    }
+
+    rc = check_stream_parser_with_payload();
+    if (rc != 0) {
+        fprintf(stderr, "stream parser payload check failed: %d\n", rc);
         return rc;
     }
 

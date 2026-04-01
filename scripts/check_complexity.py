@@ -14,7 +14,7 @@ import os
 import re
 
 
-DEFAULT_MAX_COMPLEXITY = 15
+DEFAULT_MAX_COMPLEXITY = 10
 
 DECISION_POINTS = [
     r'\bif\s*\(',
