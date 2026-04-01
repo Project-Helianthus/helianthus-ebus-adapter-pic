@@ -44,6 +44,10 @@
 #define PICFW_PORT_B 1u
 #define PICFW_PORT_C 2u
 
+/* LED2 (Info Blue): RC6, output via R7 1k resistor */
+#define PICFW_PIN_LED2_PORT PICFW_PORT_C
+#define PICFW_PIN_LED2_BIT  6u
+
 /* Signal-detect: RB1/INT (external interrupt, eBUS transceiver presence) */
 #define PICFW_PIN_SIGNAL_DETECT_PORT PICFW_PORT_B
 #define PICFW_PIN_SIGNAL_DETECT_BIT  1u

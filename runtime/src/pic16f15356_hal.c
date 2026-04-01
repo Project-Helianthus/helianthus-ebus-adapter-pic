@@ -142,6 +142,9 @@ void picfw_pic16f15356_hal_runtime_init(picfw_pic16f15356_hal_t *hal) {
   /* PPS routing for EUSART1/2 */
   picfw_pic16f15356_hal_configure_pps(hal);
 
+  /* Initialize LED state machine */
+  picfw_led_init(&hal->led);
+
   /* Simulation defaults: pull-up high on strap and signal-detect inputs */
   hal->latches.porta_input = 0x33u; /* RA0,RA1,RA4,RA5 high (straps open) */
   hal->latches.portb_input = 0x02u; /* RB1=1 (signal present) */
@@ -263,6 +266,20 @@ picfw_bool_t picfw_pic16f15356_mainline_service(picfw_pic16f15356_hal_t *hal, pi
    * TXREG writes where the ISR re-sets the flag after each shift-out. */
   hal->latches.host_tx_ready = PICFW_FALSE;
   hal->latches.bus_tx_ready = PICFW_FALSE;
+
+  /* LED state machine: derive flags from runtime state, service, write pin */
+  {
+    uint8_t led_flags = 0u;
+    picfw_bool_t led_out;
+    if (runtime->last_error != 0u) {
+      led_flags |= PICFW_LED_FLAG_ERROR;
+      runtime->last_error = 0u; /* consume error edge */
+    }
+    led_out = picfw_led_service(&hal->led, hal->runtime_now_ms, led_flags);
+    picfw_pic16f15356_hal_write_pin(hal, PICFW_PIN_LED2_PORT,
+                                     PICFW_PIN_LED2_BIT, led_out);
+  }
+
   picfw_pic16f15356_mainline_flush_host_tx(hal, runtime);
   return PICFW_TRUE;
 }
