@@ -48,6 +48,13 @@ _Static_assert(sizeof(picfw_runtime_variant_codes) /
                        sizeof(picfw_runtime_variant_codes[0]) ==
                    PICFW_RUNTIME_VARIANT_CODE_COUNT,
                "variant_codes array size must match VARIANT_CODE_COUNT");
+_Static_assert(
+    (PICFW_RUNTIME_EVENT_QUEUE_CAP & (PICFW_RUNTIME_EVENT_QUEUE_CAP - 1u)) ==
+        0u,
+    "EVENT_QUEUE_CAP must be power of 2 for bitmask indexing");
+_Static_assert(
+    (PICFW_RUNTIME_HOST_TX_CAP & (PICFW_RUNTIME_HOST_TX_CAP - 1u)) == 0u,
+    "HOST_TX_CAP must be power of 2 for bitmask indexing");
 #endif
 
 static void picfw_runtime_event_queue_init(picfw_runtime_event_queue_t *queue) {
@@ -111,7 +118,19 @@ picfw_runtime_byte_queue_pop(picfw_runtime_byte_queue_t *queue,
   return PICFW_TRUE;
 }
 
-static picfw_bool_t is_valid_protocol_state(uint8_t state) {
+/* State validation is inlined here (not a separate function) to keep the
+ * deepest call chain at 13 instead of 14.  The critical path runs through
+ * dispatch_flags_retry -> set_protocol_state_ready -> set_protocol_state;
+ * a separate is_valid_protocol_state() would add one more level, hitting
+ * the PIC16 16-level hardware stack limit with no ISR headroom.
+ *
+ * All callers guard runtime != 0 before reaching this function, so no
+ * NULL check is needed here (verified: set_protocol_state_pending,
+ * set_protocol_state_ready, set_protocol_state_scan, dispatch_flags_retry,
+ * dispatch_common_tail, continue_fsm_variant_dispatch — all called from
+ * already-guarded contexts). */
+static void picfw_runtime_set_protocol_state(picfw_runtime_t *runtime,
+                                             uint8_t state, uint8_t flags) {
   switch (state) {
   case PICFW_PROTOCOL_STATE_IDLE:
   case PICFW_PROTOCOL_STATE_PENDING:
@@ -121,24 +140,12 @@ static picfw_bool_t is_valid_protocol_state(uint8_t state) {
   case PICFW_PROTOCOL_STATE_OFFSET_SCAN:
   case PICFW_PROTOCOL_STATE_SCAN:
   case PICFW_PROTOCOL_STATE_RETRY:
-    return PICFW_TRUE;
+    runtime->protocol_state = state;
+    runtime->protocol_state_flags = flags;
+    break;
   default:
-    return PICFW_FALSE;
+    break; /* reject invalid state */
   }
-}
-
-static void picfw_runtime_set_protocol_state(picfw_runtime_t *runtime,
-                                             uint8_t state, uint8_t flags) {
-  if (runtime == 0) {
-    return;
-  }
-
-  if (!is_valid_protocol_state(state)) {
-    return; /* reject invalid state */
-  }
-
-  runtime->protocol_state = state;
-  runtime->protocol_state_flags = flags;
 }
 
 static void picfw_runtime_set_protocol_state_pending(picfw_runtime_t *runtime) {
@@ -1328,8 +1335,7 @@ static void continue_fsm_variant_dispatch(picfw_runtime_t *runtime) {
     return;
   }
 
-  code = picfw_runtime_variant_codes[runtime->scan_dispatch_cursor %
-                                     PICFW_RUNTIME_VARIANT_CODE_COUNT];
+  code = picfw_runtime_variant_codes[runtime->scan_dispatch_cursor];
   runtime->scan_probe_deadline_ms = 0u;
   runtime->scan_phase = PICFW_RUNTIME_SCAN_PHASE_PASS;
   runtime->scan_protocol_code = PICFW_RUNTIME_PROTOCOL_CODE_DEFAULT;
@@ -1347,8 +1353,10 @@ static void continue_fsm_variant_dispatch(picfw_runtime_t *runtime) {
   picfw_runtime_initialize_scan_slot_full(runtime, runtime->active_scan_slot);
   picfw_runtime_save_scan_context(runtime);
   runtime->scan_dispatch_cursor =
-      (uint8_t)((runtime->scan_dispatch_cursor + 1u) %
-                PICFW_RUNTIME_VARIANT_CODE_COUNT);
+      (uint8_t)(runtime->scan_dispatch_cursor + 1u);
+  if (runtime->scan_dispatch_cursor >= PICFW_RUNTIME_VARIANT_CODE_COUNT) {
+    runtime->scan_dispatch_cursor = 0u;
+  }
 
   if (runtime->scan_dispatch_cursor == 0u) {
     runtime->scan_phase = PICFW_RUNTIME_SCAN_PHASE_RETRY;
@@ -1448,9 +1456,16 @@ static void dispatch_compute_scan_params(uint32_t scan_seed,
                                          uint32_t *out_transformed,
                                          uint32_t *out_limit,
                                          uint32_t *out_delay) {
-  uint32_t transformed = picfw_runtime_seed_window_transform(scan_seed);
-  uint32_t limit = picfw_runtime_normalize_scan_limit(transformed);
-  uint32_t delay = picfw_runtime_normalize_scan_delay(transformed);
+  uint32_t transformed;
+  uint32_t limit;
+  uint32_t delay;
+
+  if (out_transformed == 0 || out_limit == 0 || out_delay == 0) {
+    return;
+  }
+  transformed = picfw_runtime_seed_window_transform(scan_seed);
+  limit = picfw_runtime_normalize_scan_limit(transformed);
+  delay = picfw_runtime_normalize_scan_delay(transformed);
 
   if (delay > limit) {
     delay = limit;

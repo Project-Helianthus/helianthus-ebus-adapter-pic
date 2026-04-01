@@ -1726,6 +1726,48 @@ static int test_scan_mask_functions(void) {
   errors += expect_true(name, runtime.status_seed_latch == 0xABu,
                         "shift_saved sets seed latch");
 
+  /* shift_saved_scan_masks: shift_count == 0 (no-op shift, post_merge runs) */
+  picfw_runtime_init(&runtime, &config);
+  runtime.startup_state = PICFW_STARTUP_LIVE_READY;
+  runtime.protocol_state = PICFW_PROTOCOL_STATE_READY;
+  runtime.saved_scan_seed = 0xFF000000u;
+  runtime.scan_seed = 0x000000CDu;
+  runtime.merged_window_ms = 0x00000100u;
+  runtime.scan_window_limit_ms = 0x00000200u;
+  picfw_runtime_shift_saved_scan_masks(&runtime, 0u);
+  errors += expect_true(name, runtime.merged_window_ms == 0x00000100u,
+                        "shift_count=0 preserves merged_window_ms");
+
+  /* shift_saved_scan_masks: shift_count == 32 (UB guard => shifted=0).
+   * merged |= 0 stays 0, clamped to MIN_DELAY, then post_merge_validate
+   * recomputes to limit>>3. */
+  picfw_runtime_init(&runtime, &config);
+  runtime.startup_state = PICFW_STARTUP_LIVE_READY;
+  runtime.protocol_state = PICFW_PROTOCOL_STATE_READY;
+  runtime.saved_scan_seed = 0xFFFFFFFFu;
+  runtime.scan_seed = 0x000000EFu;
+  runtime.merged_window_ms = 0u;
+  runtime.scan_window_limit_ms = 0x00000200u;
+  picfw_runtime_shift_saved_scan_masks(&runtime, 32u);
+  errors += expect_true(name,
+                        runtime.merged_window_ms == (0x00000200u >> 3),
+                        "shift_count=32 produces post-validated merged");
+  errors += expect_true(name, runtime.status_seed_latch == 0xEFu,
+                        "shift_count=32 sets seed latch");
+
+  /* shift_saved_scan_masks: shift_count == 33 (also UB-guarded) */
+  picfw_runtime_init(&runtime, &config);
+  runtime.startup_state = PICFW_STARTUP_LIVE_READY;
+  runtime.protocol_state = PICFW_PROTOCOL_STATE_READY;
+  runtime.saved_scan_seed = 0xFFFFFFFFu;
+  runtime.scan_seed = 0x00000012u;
+  runtime.merged_window_ms = 0u;
+  runtime.scan_window_limit_ms = 0x00000200u;
+  picfw_runtime_shift_saved_scan_masks(&runtime, 33u);
+  errors += expect_true(name,
+                        runtime.merged_window_ms == (0x00000200u >> 3),
+                        "shift_count=33 produces post-validated merged");
+
   return errors;
 }
 

@@ -68,7 +68,7 @@ check-complexity:
 ## STACK: PIC16 call stack depth limit (max 14 of 16 levels)
 check-stack-depth:
 	@echo "--- [STACK] Call stack depth ---"
-	@$(PYTHON) scripts/check_stack_depth.py $(SRC_DIRS) --max-depth=14
+	@$(PYTHON) scripts/check_stack_depth.py $(SRC_DIRS) --max-depth=13
 
 ## R10: Ring buffer sizes (power-of-2) and bitmask indexing
 check-buffers:

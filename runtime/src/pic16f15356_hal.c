@@ -2,6 +2,13 @@
 
 #include <string.h>
 
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+_Static_assert(
+    (PICFW_PIC16F15356_ISR_LATCH_CAP &
+     (PICFW_PIC16F15356_ISR_LATCH_CAP - 1u)) == 0u,
+    "ISR_LATCH_CAP must be power of 2 for bitmask indexing");
+#endif
+
 static void picfw_pic16f15356_byte_fifo_init(picfw_pic16f15356_byte_fifo_t *fifo) {
   if (fifo == 0) {
     return;

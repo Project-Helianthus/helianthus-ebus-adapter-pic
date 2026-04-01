@@ -26,7 +26,7 @@ The checks scan these directories:
 | R8 | Cyclomatic complexity < 10 per function | Yes | Decision point counting |
 | R9 | Hardware timers for temporal decisions | Manual | Code review |
 | R10 | Ring buffers power-of-2, bitmask indexing | Yes | Buffer size + modulo scan |
-| STACK | Call depth < 14 (16-level HW stack) | Yes | Call graph DFS |
+| STACK | Call depth < 13 (16-level HW stack, 3 for ISR) | Yes | Call graph DFS |
 | GUARD | Header include guards | Yes | Pattern scan |
 | RAM | Static struct footprint < 75% of 2KB | Yes | Host sizeof budget check |
 | WCET | ISR-context functions < 60 cycles | Yes | Source heuristic (naming pattern) |
@@ -90,3 +90,17 @@ The eBUS protocol FSM must be implemented as a flat `switch/case` on an enum sta
 - Static `const` function pointer arrays (placed in ROM by the compiler; the `const` qualifier prevents mutation)
 
 No other exceptions exist. If a rule seems too restrictive for your use case, the code design needs to change -- not the rule.
+
+### STACK: Frozen Call Path
+
+The deepest mainline call chain (13 levels) runs through the scan FSM retry path:
+
+```
+app_mainline_service → mainline_service → runtime_step →
+  service_periodic_status → try_emit_variant → emit_periodic_variant →
+    continue_scan_window → continue_scan_fsm → continue_fsm_phase_retry →
+      protocol_state_dispatch → dispatch_flags_retry →
+        set_protocol_state_ready → set_protocol_state
+```
+
+**Do not add function call levels on this path.** The PIC16F15356 has a 16-level hardware call stack. Budget: 13 mainline + 3 ISR (deepest ISR chain: `app_isr_host_rx → isr_latch_host_rx → byte_fifo_push`) = 16. Zero margin. If you must refactor code here, inline a deeper helper to recover a level first.

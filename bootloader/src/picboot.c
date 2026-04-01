@@ -71,6 +71,12 @@ static const picboot_validation_rule_t PICBOOT_VALIDATION_RULES[PICBOOT_COMMAND_
     /* [PICBOOT_CALC_CRC     = 10] */ { 1u, PICBOOT_DATA_CAP,                         true  },
 };
 
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+_Static_assert(sizeof(PICBOOT_VALIDATION_RULES) / sizeof(PICBOOT_VALIDATION_RULES[0])
+                   == PICBOOT_COMMAND_COUNT,
+               "PICBOOT_VALIDATION_RULES size must match PICBOOT_COMMAND_COUNT");
+#endif
+
 /* Set error_status (if non-NULL) and return false — de-duplicates the
  * repeated if(error_status) pattern inside the validator. */
 static bool picboot_validation_fail(uint8_t *error_status, uint8_t code) {
@@ -455,14 +461,16 @@ uint16_t picboot_crc16_ccitt(const uint8_t *data, size_t len) {
 }
 
 static bool handle_read_version(picboot_bootloader_t *bootloader, const picboot_frame_t *request, picboot_frame_t *response) {
+    const picboot_bootloader_t *const bl = bootloader;
     picboot_version_payload_t payload;
 
-    picboot_build_version_payload(bootloader, &payload);
+    picboot_build_version_payload(bl, &payload);
     set_success_response(request, response, (const uint8_t *)&payload, sizeof(payload));
     return true;
 }
 
 static bool handle_read_flash(picboot_bootloader_t *bootloader, const picboot_frame_t *request, picboot_frame_t *response) {
+    const picboot_bootloader_t *const bl = bootloader;
     uint16_t length;
     uint16_t address_words;
     size_t offset;
@@ -475,7 +483,7 @@ static bool handle_read_flash(picboot_bootloader_t *bootloader, const picboot_fr
     }
 
     offset = picboot_flash_offset(address_words);
-    set_success_response(request, response, &bootloader->flash[offset], length);
+    set_success_response(request, response, &bl->flash[offset], length);
     return true;
 }
 
@@ -532,17 +540,18 @@ static bool handle_erase_flash(picboot_bootloader_t *bootloader, const picboot_f
 }
 
 static bool handle_read_ee_data(picboot_bootloader_t *bootloader, const picboot_frame_t *request, picboot_frame_t *response) {
+    const picboot_bootloader_t *const bl = bootloader;
     uint16_t length;
     uint16_t address;
 
     length = picboot_request_u16(request);
     address = picboot_request_address(request);
-    if (length > sizeof(response->header.data) || !picboot_range_within(address, length, sizeof(bootloader->ee_data))) {
+    if (length > sizeof(response->header.data) || !picboot_range_within(address, length, sizeof(bl->ee_data))) {
         set_error_response(request, response, PICBOOT_ERROR_ADDRESS_OUT_OF_RANGE);
         return false;
     }
 
-    set_success_response(request, response, &bootloader->ee_data[address], length);
+    set_success_response(request, response, &bl->ee_data[address], length);
     return true;
 }
 
@@ -567,6 +576,7 @@ static bool handle_write_ee_data(picboot_bootloader_t *bootloader, const picboot
 }
 
 static bool handle_read_config(picboot_bootloader_t *bootloader, const picboot_frame_t *request, picboot_frame_t *response) {
+    const picboot_bootloader_t *const bl = bootloader;
     uint16_t length;
     uint16_t address;
     uint8_t buffer[PICBOOT_FRAME_MAX_LEN];
@@ -579,7 +589,7 @@ static bool handle_read_config(picboot_bootloader_t *bootloader, const picboot_f
         return false;
     }
     memset(buffer, 0, sizeof(buffer));
-    picboot_build_config_window(bootloader, address, length, buffer);
+    picboot_build_config_window(bl, address, length, buffer);
     set_success_response(request, response, buffer, length);
     return true;
 }
@@ -621,6 +631,7 @@ static bool handle_reset_device(picboot_bootloader_t *bootloader, const picboot_
 }
 
 static bool handle_calc_checksum(picboot_bootloader_t *bootloader, const picboot_frame_t *request, picboot_frame_t *response) {
+    const picboot_bootloader_t *const bl = bootloader;
     uint16_t length;
     uint16_t address_words;
     uint16_t check_sum;
@@ -635,7 +646,7 @@ static bool handle_calc_checksum(picboot_bootloader_t *bootloader, const picboot
     }
 
     offset = picboot_flash_offset(address_words);
-    check_sum = picboot_checksum_words_le(&bootloader->flash[offset], length);
+    check_sum = picboot_checksum_words_le(&bl->flash[offset], length);
     response->header.command = request->header.command;
     response->header.data_length = 2u;
     response->header.address_l = request->header.address_l;
@@ -647,6 +658,7 @@ static bool handle_calc_checksum(picboot_bootloader_t *bootloader, const picboot
 }
 
 static bool handle_calc_crc(picboot_bootloader_t *bootloader, const picboot_frame_t *request, picboot_frame_t *response) {
+    const picboot_bootloader_t *const bl = bootloader;
     uint16_t length;
     uint16_t address_words;
     uint16_t crc;
@@ -661,7 +673,7 @@ static bool handle_calc_crc(picboot_bootloader_t *bootloader, const picboot_fram
     }
 
     offset = picboot_flash_offset(address_words);
-    crc = picboot_crc16_ccitt(&bootloader->flash[offset], length);
+    crc = picboot_crc16_ccitt(&bl->flash[offset], length);
     response->header.command = request->header.command;
     response->header.data_length = 2u;
     response->header.address_l = request->header.address_l;

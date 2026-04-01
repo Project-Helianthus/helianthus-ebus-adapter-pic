@@ -77,8 +77,8 @@ jobs:
       - name: STACK — Call Stack Depth
         id: stack
         run: |
-          python3 scripts/check_stack_depth.py runtime/src runtime/include --max-depth=14
-          python3 scripts/check_stack_depth.py bootloader/src bootloader/include --max-depth=14
+          python3 scripts/check_stack_depth.py runtime/src runtime/include --max-depth=13
+          python3 scripts/check_stack_depth.py bootloader/src bootloader/include --max-depth=13
 
       - name: R10 — Buffer Sizes
         id: buffers
