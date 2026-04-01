@@ -1663,6 +1663,8 @@ void picfw_runtime_config_init_default(picfw_runtime_config_t *config) {
   config->info_payload_len[PICFW_ADAPTER_INFO_RESET_INFO] = 2u;
   config->info_payload[PICFW_ADAPTER_INFO_RESET_INFO][0] = 0x05u;
   config->info_payload[PICFW_ADAPTER_INFO_RESET_INFO][1] = 0x01u;
+
+  config->arbitration_delay_us = 0u; /* no added delay by default */
 }
 
 void picfw_runtime_init(picfw_runtime_t *runtime,
