@@ -2747,6 +2747,112 @@ static int test_signal_detect_gates_status_emission(void) {
   return errors;
 }
 
+static int test_led_state_machine(void) {
+  const char *name = "led_state_machine";
+  picfw_led_t led;
+  picfw_bool_t out;
+  int errors = 0;
+  uint32_t now = 1000u;
+
+  /* Init: OFF state, output = false */
+  picfw_led_init(&led);
+  errors += expect_true(name, led.state == PICFW_LED_OFF, "init state OFF");
+  out = picfw_led_service(&led, now, 0u);
+  errors += expect_true(name, out == PICFW_FALSE, "OFF output is false");
+
+  /* Null guard */
+  out = picfw_led_service(0, now, 0u);
+  errors += expect_true(name, out == PICFW_FALSE, "null guard returns false");
+  picfw_led_init(0); /* no crash */
+  picfw_led_set_state(0, PICFW_LED_NORMAL, now); /* no crash */
+
+  /* BLINK_SLOW: toggle at 500ms intervals */
+  picfw_led_set_state(&led, PICFW_LED_BLINK_SLOW, now);
+  out = picfw_led_service(&led, now, 0u);
+  errors += expect_true(name, out == PICFW_FALSE, "blink_slow starts off");
+  out = picfw_led_service(&led, now + 500u, 0u);
+  errors += expect_true(name, out == PICFW_TRUE, "blink_slow toggles on at 500ms");
+  out = picfw_led_service(&led, now + 1000u, 0u);
+  errors += expect_true(name, out == PICFW_FALSE, "blink_slow toggles off at 1000ms");
+
+  /* BLINK_FAST: toggle at 100ms */
+  picfw_led_set_state(&led, PICFW_LED_BLINK_FAST, now);
+  out = picfw_led_service(&led, now + 100u, 0u);
+  errors += expect_true(name, out == PICFW_TRUE, "blink_fast toggles at 100ms");
+
+  /* BLINK_VERY_FAST: toggle at 50ms */
+  picfw_led_set_state(&led, PICFW_LED_BLINK_VERY_FAST, now);
+  out = picfw_led_service(&led, now + 50u, 0u);
+  errors += expect_true(name, out == PICFW_TRUE, "blink_very_fast toggles at 50ms");
+
+  /* FADE_UP: steps through, then transitions to prev_state */
+  led.prev_state = PICFW_LED_NORMAL;
+  picfw_led_set_state(&led, PICFW_LED_FADE_UP, now);
+  errors += expect_true(name, led.fade_step == 0u, "fade starts at step 0");
+  /* Advance through all fade steps */
+  {
+    uint8_t step;
+    for (step = 0u; step < PICFW_LED_FADE_STEPS; step++) {
+      now += PICFW_LED_FADE_STEP_MS;
+      out = picfw_led_service(&led, now, 0u);
+    }
+  }
+  errors += expect_true(name, led.state == PICFW_LED_NORMAL,
+                        "fade complete -> NORMAL");
+
+  /* NORMAL: always on, ping after 4s */
+  now = 10000u;
+  picfw_led_set_state(&led, PICFW_LED_NORMAL, now);
+  out = picfw_led_service(&led, now, 0u);
+  errors += expect_true(name, out == PICFW_TRUE, "NORMAL is on");
+  /* Advance to ping deadline */
+  out = picfw_led_service(&led, now + PICFW_LED_PING_PERIOD_MS, 0u);
+  errors += expect_true(name, led.state == PICFW_LED_PING,
+                        "NORMAL -> PING after 4s");
+  /* Ping expires */
+  out = picfw_led_service(&led, now + PICFW_LED_PING_PERIOD_MS +
+                                PICFW_LED_PING_DURATION_MS, 0u);
+  errors += expect_true(name, led.state == PICFW_LED_NORMAL,
+                        "PING -> NORMAL after 100ms");
+
+  /* LOW: same as NORMAL but conceptually dim */
+  now = 20000u;
+  picfw_led_set_state(&led, PICFW_LED_LOW, now);
+  out = picfw_led_service(&led, now, 0u);
+  errors += expect_true(name, out == PICFW_TRUE, "LOW is on (sim: always on)");
+  out = picfw_led_service(&led, now + PICFW_LED_PING_PERIOD_MS, 0u);
+  errors += expect_true(name, led.state == PICFW_LED_PING,
+                        "LOW -> PING after 4s");
+
+  /* BRIGHT via INIT flag: 2 seconds */
+  now = 30000u;
+  picfw_led_set_state(&led, PICFW_LED_NORMAL, now);
+  out = picfw_led_service(&led, now, PICFW_LED_FLAG_INIT_CMD);
+  errors += expect_true(name, led.state == PICFW_LED_BRIGHT,
+                        "INIT flag -> BRIGHT");
+  errors += expect_true(name, out == PICFW_TRUE, "BRIGHT is on");
+  /* Before deadline: still BRIGHT */
+  out = picfw_led_service(&led, now + 1999u, 0u);
+  errors += expect_true(name, led.state == PICFW_LED_BRIGHT,
+                        "BRIGHT persists before 2s");
+  /* At deadline: returns to prev_state (NORMAL) */
+  out = picfw_led_service(&led, now + 2000u, 0u);
+  errors += expect_true(name, led.state == PICFW_LED_NORMAL,
+                        "BRIGHT -> NORMAL after 2s");
+
+  /* BRIGHT via ERROR flag: 5 seconds */
+  now = 40000u;
+  picfw_led_set_state(&led, PICFW_LED_NORMAL, now);
+  out = picfw_led_service(&led, now, PICFW_LED_FLAG_ERROR);
+  errors += expect_true(name, led.state == PICFW_LED_BRIGHT,
+                        "ERROR flag -> BRIGHT");
+  out = picfw_led_service(&led, now + 5000u, 0u);
+  errors += expect_true(name, led.state == PICFW_LED_NORMAL,
+                        "BRIGHT -> NORMAL after 5s (error)");
+
+  return errors;
+}
+
 static int test_gpio_and_pin_model(void) {
   const char *name = "gpio_and_pin_model";
   picfw_pic16f15356_hal_t hal;
@@ -3065,6 +3171,9 @@ int main(void) {
     return 1;
   }
   if (test_signal_detect_gates_status_emission() != 0) {
+    return 1;
+  }
+  if (test_led_state_machine() != 0) {
     return 1;
   }
   printf("runtime tests passed\n");

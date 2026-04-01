@@ -1,6 +1,7 @@
 #ifndef PICFW_PIC16F15356_HAL_H
 #define PICFW_PIC16F15356_HAL_H
 
+#include "led.h"
 #include "runtime.h"
 
 #define PICFW_PIC16F15356_ISR_LATCH_CAP 16u
@@ -88,6 +89,7 @@ typedef struct picfw_pic16f15356_hal {
   uint32_t runtime_now_ms;
   uint32_t runtime_step_count;
   picfw_pic16f15356_uart_mode_t uart_mode;
+  picfw_led_t led;
 } picfw_pic16f15356_hal_t;
 
 /* J12 AUX strap configuration (active-low: open=high, GND=low) */
