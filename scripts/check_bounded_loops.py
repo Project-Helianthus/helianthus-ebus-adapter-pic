@@ -31,7 +31,10 @@ def find_c_files(directory):
 
 def strip_comments(content):
     content = re.sub(r'//.*$', '', content, flags=re.MULTILINE)
-    content = re.sub(r'/\*.*?\*/', '', content, flags=re.DOTALL)
+    # Replace block comments preserving newline count so line numbers stay aligned
+    def _preserve_newlines(m):
+        return '\n' * m.group(0).count('\n')
+    content = re.sub(r'/\*.*?\*/', _preserve_newlines, content, flags=re.DOTALL)
     return content
 
 
@@ -76,14 +79,16 @@ def check_file(filepath):
     with open(filepath, 'r', errors='replace') as f:
         content = f.read()
 
+    original_lines = content.split('\n')
     clean = strip_comments(content)
     lines = clean.split('\n')
 
     for line_num, line in enumerate(lines, 1):
         stripped = line.strip()
 
-        # Skip lines with NOLINT suppression (check original source)
-        if 'NOLINT(determinism)' in line:
+        # Skip lines with NOLINT suppression (check original source,
+        # since strip_comments removes the comment containing NOLINT)
+        if line_num <= len(original_lines) and 'NOLINT(determinism)' in original_lines[line_num - 1]:
             continue
 
         # --- for loops ---

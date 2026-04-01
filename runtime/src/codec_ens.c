@@ -117,7 +117,7 @@ int picfw_ens_decode(const uint8_t *input, size_t input_len, uint8_t *out, size_
   }
 
   picfw_ens_parser_init(&parser);
-  for (idx = 0; idx < input_len; ++idx) {
+  for (idx = 0; idx < input_len; ++idx) { /* NOLINT(determinism) bound: input_len clamped to PICFW_ENS_INPUT_MAX above */
     uint8_t decoded = 0;
     int rc = picfw_ens_parser_feed(&parser, input[idx], &decoded);
     if (rc < 0) {
