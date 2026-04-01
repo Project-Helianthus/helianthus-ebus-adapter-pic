@@ -10,6 +10,7 @@
 typedef enum picfw_pic16f15356_uart_mode {
   PICFW_PIC16F15356_UART_MODE_DEFAULT = 0u,
   PICFW_PIC16F15356_UART_MODE_HIGH_SPEED = 1u,
+  PICFW_PIC16F15356_UART_MODE_VERY_HIGH_SPEED = 2u,
 } picfw_pic16f15356_uart_mode_t;
 
 typedef struct picfw_pic16f15356_byte_fifo {
