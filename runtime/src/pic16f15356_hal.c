@@ -7,6 +7,9 @@ _Static_assert(
     (PICFW_PIC16F15356_ISR_LATCH_CAP &
      (PICFW_PIC16F15356_ISR_LATCH_CAP - 1u)) == 0u,
     "ISR_LATCH_CAP must be power of 2 for bitmask indexing");
+_Static_assert(
+    sizeof(picfw_pic16f15356_registers_t) <= 48u,
+    "registers struct grew beyond expected size — review new fields");
 #endif
 
 static void picfw_pic16f15356_byte_fifo_init(picfw_pic16f15356_byte_fifo_t *fifo) {
@@ -55,6 +58,12 @@ static void picfw_pic16f15356_hal_init_latches(picfw_pic16f15356_hal_t *hal) {
   hal->latches.host_rx_overruns = 0u;
   hal->latches.bus_rx_overruns = 0u;
   hal->latches.host_tx_overruns = 0u;
+  /* Simulated port inputs and TX-ready flags (test harness sets these) */
+  hal->latches.porta_input = 0u;
+  hal->latches.portb_input = 0u;
+  hal->latches.portc_input = 0u;
+  hal->latches.host_tx_ready = PICFW_FALSE;
+  hal->latches.bus_tx_ready = PICFW_FALSE;
 }
 
 void picfw_pic16f15356_hal_reset(picfw_pic16f15356_hal_t *hal) {
@@ -243,7 +252,11 @@ picfw_bool_t picfw_pic16f15356_mainline_service(picfw_pic16f15356_hal_t *hal, pi
 
   picfw_runtime_step(runtime, hal->runtime_now_ms);
   hal->runtime_step_count++;
-  /* Consume TX-ready flags (set by ISR, cleared by mainline flush cycle) */
+  /* Consume TX-ready flags (set by ISR, cleared here each mainline cycle).
+   * Ordering: flags are cleared BEFORE flush because the simulation model
+   * pushes to an intermediate FIFO, not directly to TXREG.  On real hardware,
+   * the TX mechanism will be redesigned as interrupt-driven byte-by-byte
+   * TXREG writes where the ISR re-sets the flag after each shift-out. */
   hal->latches.host_tx_ready = PICFW_FALSE;
   hal->latches.bus_tx_ready = PICFW_FALSE;
   picfw_pic16f15356_mainline_flush_host_tx(hal, runtime);
@@ -267,7 +280,16 @@ size_t picfw_pic16f15356_hal_drain_host_tx(picfw_pic16f15356_hal_t *hal, uint8_t
   return out_len;
 }
 
-/* --- GPIO pin read/write (simulation model) --- */
+/* --- GPIO pin read/write (simulation model) ---
+ *
+ * Simulation note: read_pin always returns portX_input regardless of TRIS
+ * direction, and write_pin always writes to LATx regardless of TRIS.
+ * On real PIC16F hardware, reading a PORT register for an output pin returns
+ * the actual pin level (normally matches LAT), and writing LAT on an input
+ * pin is a valid "pre-staging" operation.  The simulation intentionally
+ * decouples input stimuli (portX_input, set by test harness) from output
+ * state (latX, set by write_pin).  On the real hardware port, read_pin
+ * will be replaced with direct SFR reads (e.g. PORTAbits.RA4). */
 
 picfw_bool_t picfw_pic16f15356_hal_read_pin(const picfw_pic16f15356_hal_t *hal,
                                              uint8_t port, uint8_t bit) {
@@ -368,16 +390,26 @@ void picfw_pic16f15356_hal_read_straps(const picfw_pic16f15356_hal_t *hal,
   variant_b = picfw_pic16f15356_hal_read_pin(
       hal, PICFW_STRAP_VARIANT2_PORT, PICFW_STRAP_VARIANT2_BIT);
 
-  straps->enhanced_protocol = protocol_pin;  /* high = enhanced */
-  straps->high_speed = (picfw_bool_t)(!speed_pin); /* low = high-speed */
+  /* J12 strap polarity — asymmetry is hardware design intent:
+   * - Protocol (Pin 2/RA4): "open = enhanced" — pull-up HIGH = feature active.
+   *   Enhanced is the safe default for ebusd users, so direct mapping.
+   * - Speed (Pin 7/RA5): "open = normal-speed" — pull-up HIGH = safe default.
+   *   High-speed requires deliberate grounding, so inverted mapping. */
+  straps->enhanced_protocol = protocol_pin;            /* HIGH = enhanced */
+  straps->high_speed = (picfw_bool_t)(!speed_pin);     /* LOW  = high-speed */
 
-  /* Variant decode: both high=RPi/USB(0), A low=WIFI(1), both low=Ethernet(2) */
+  /* Variant decode from J12 Pin 5 (RA0/RA1):
+   *   both high (open)     = RPi/USB  (0) — default, no jumper
+   *   A low, B high        = WIFI     (1) — Pin 5 to Pin 4 (v3.0)
+   *   both low             = Ethernet (2) — Pin 5 to GND
+   *   A high, B low        = impossible physical state (J12 wiring pulls
+   *                          both pins together); falls to RPi/USB default */
   if (!variant_a && !variant_b) {
-    straps->variant = 2u; /* Ethernet */
+    straps->variant = PICFW_VARIANT_ETHERNET;
   } else if (!variant_a) {
-    straps->variant = 1u; /* WIFI */
+    straps->variant = PICFW_VARIANT_WIFI;
   } else {
-    straps->variant = 0u; /* RPi/USB */
+    straps->variant = PICFW_VARIANT_RPI_USB;
   }
 }
 

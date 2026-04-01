@@ -80,6 +80,11 @@
 #define PICFW_PIN_SPI2_SEL_PORT  PICFW_PORT_C
 #define PICFW_PIN_SPI2_SEL_BIT   5u   /* RC5/SEL2 */
 
+/* J12 AUX variant identifiers (decoded from RA0/RA1 strap pins) */
+#define PICFW_VARIANT_RPI_USB  0u
+#define PICFW_VARIANT_WIFI     1u
+#define PICFW_VARIANT_ETHERNET 2u
+
 /* PPS routing values (PIC16F15356 datasheet DS40001866 Table 15-2) */
 #define PICFW_PPS_EUSART1_TX 0x0Fu  /* RxyPPS value for TX1/CK1 output */
 #define PICFW_PPS_EUSART2_TX 0x11u  /* RxyPPS value for TX2/CK2 output */

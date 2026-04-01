@@ -2760,7 +2760,7 @@ static int test_gpio_and_pin_model(void) {
                         "strap: enhanced protocol (pin high)");
   errors += expect_true(name, straps.high_speed == PICFW_FALSE,
                         "strap: normal speed (pin high -> !high_speed)");
-  errors += expect_true(name, straps.variant == 0u,
+  errors += expect_true(name, straps.variant == PICFW_VARIANT_RPI_USB,
                         "strap: RPi/USB variant");
 
   /* Strap read: high-speed + ethernet */
@@ -2768,7 +2768,7 @@ static int test_gpio_and_pin_model(void) {
   picfw_pic16f15356_hal_read_straps(&hal, &straps);
   errors += expect_true(name, straps.high_speed == PICFW_TRUE,
                         "strap: high-speed (pin low)");
-  errors += expect_true(name, straps.variant == 2u,
+  errors += expect_true(name, straps.variant == PICFW_VARIANT_ETHERNET,
                         "strap: Ethernet (both low)");
 
   /* TX ISR handlers */
@@ -2859,7 +2859,7 @@ static int test_gpio_and_pin_model(void) {
   /* Strap: WIFI variant (A low, B high) */
   hal.latches.porta_input = 0x32u; /* RA0=0, RA1=1, RA4=1, RA5=1 */
   picfw_pic16f15356_hal_read_straps(&hal, &straps);
-  errors += expect_true(name, straps.variant == 1u,
+  errors += expect_true(name, straps.variant == PICFW_VARIANT_WIFI,
                         "strap: WIFI variant (A low, B high)");
 
   /* Strap: standard protocol (RA4 low) */
