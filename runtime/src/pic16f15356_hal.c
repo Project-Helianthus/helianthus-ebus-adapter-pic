@@ -148,6 +148,17 @@ void picfw_pic16f15356_hal_runtime_init(picfw_pic16f15356_hal_t *hal) {
   /* Simulation defaults: pull-up high on strap and signal-detect inputs */
   hal->latches.porta_input = 0x33u; /* RA0,RA1,RA4,RA5 high (straps open) */
   hal->latches.portb_input = 0x02u; /* RB1=1 (signal present) */
+
+  /* Determine WiFi variant from straps and set initial LED state */
+  {
+    picfw_pic16f15356_straps_t straps;
+    picfw_pic16f15356_hal_read_straps(hal, &straps);
+    hal->wifi_variant = (picfw_bool_t)(straps.variant == PICFW_VARIANT_WIFI);
+    hal->wifi_ready = PICFW_FALSE;
+    if (hal->wifi_variant) {
+      picfw_led_set_state(&hal->led, PICFW_LED_BLINK_SLOW, 0u);
+    }
+  }
 }
 
 picfw_bool_t picfw_pic16f15356_isr_latch_host_rx(picfw_pic16f15356_hal_t *hal, uint8_t byte) {
@@ -233,11 +244,41 @@ static void picfw_pic16f15356_mainline_flush_host_tx(picfw_pic16f15356_hal_t *ha
   }
 }
 
+/* WiFi startup gate: blink LED until Wemos drives RB0 HIGH.
+ * Returns TRUE if the gate is active (skip runtime processing). */
+static picfw_bool_t mainline_wifi_gate(picfw_pic16f15356_hal_t *hal) {
+  if (!hal->wifi_variant || hal->wifi_ready) {
+    return PICFW_FALSE; /* gate not active */
+  }
+
+  if (picfw_pic16f15356_hal_wifi_check(hal)) {
+    hal->wifi_ready = PICFW_TRUE;
+    picfw_led_set_state(&hal->led, PICFW_LED_FADE_UP, hal->runtime_now_ms);
+    hal->led.prev_state = PICFW_LED_NORMAL;
+  }
+  /* Service LED even while waiting (for blink animation) */
+  if (hal->latches.scheduler_pending > 0u) {
+    hal->latches.scheduler_pending--;
+    hal->runtime_now_ms += PICFW_RUNTIME_PLATFORM_SCHEDULER_PERIOD_MS;
+  }
+  {
+    picfw_bool_t led_out =
+        picfw_led_service(&hal->led, hal->runtime_now_ms, 0u);
+    picfw_pic16f15356_hal_write_pin(hal, PICFW_PIN_LED2_PORT,
+                                     PICFW_PIN_LED2_BIT, led_out);
+  }
+  return (picfw_bool_t)(!hal->wifi_ready);
+}
+
 picfw_bool_t picfw_pic16f15356_mainline_service(picfw_pic16f15356_hal_t *hal, picfw_runtime_t *runtime) {
   picfw_bool_t delivered;
   picfw_bool_t advanced_time = PICFW_FALSE;
 
   if (hal == 0 || runtime == 0) {
+    return PICFW_FALSE;
+  }
+
+  if (mainline_wifi_gate(hal)) {
     return PICFW_FALSE;
   }
 
@@ -364,6 +405,12 @@ picfw_bool_t picfw_pic16f15356_hal_signal_detect(
     const picfw_pic16f15356_hal_t *hal) {
   return picfw_pic16f15356_hal_read_pin(
       hal, PICFW_PIN_SIGNAL_DETECT_PORT, PICFW_PIN_SIGNAL_DETECT_BIT);
+}
+
+picfw_bool_t picfw_pic16f15356_hal_wifi_check(
+    const picfw_pic16f15356_hal_t *hal) {
+  return picfw_pic16f15356_hal_read_pin(
+      hal, PICFW_PIN_WIFI_CHECK_PORT, PICFW_PIN_WIFI_CHECK_BIT);
 }
 
 /* --- PPS configuration --- */
