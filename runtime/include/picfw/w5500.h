@@ -38,7 +38,7 @@
 #define PICFW_W5500_SN_DIPR0   0x000Cu  /* Destination IP (4 bytes) */
 #define PICFW_W5500_SN_DPORT0  0x0010u  /* Destination Port (2 bytes) */
 #define PICFW_W5500_SN_TXBUF_SIZE 0x001Eu  /* TX Buffer Size */
-#define PICFW_W5500_SN_RXBUF_SIZE 0x001Eu  /* RX Buffer Size (same offset) */
+#define PICFW_W5500_SN_RXBUF_SIZE 0x001Fu  /* RX Buffer Size */
 #define PICFW_W5500_SN_TX_FSR0 0x0020u  /* TX Free Size (2 bytes) */
 #define PICFW_W5500_SN_TX_RD0  0x0022u  /* TX Read Pointer (2 bytes) */
 #define PICFW_W5500_SN_TX_WR0  0x0024u  /* TX Write Pointer (2 bytes) */
@@ -89,7 +89,6 @@ typedef struct picfw_w5500 {
   uint8_t common[PICFW_W5500_COMMON_REG_SIZE];
   picfw_w5500_socket_t socket0;
   picfw_bool_t initialized;
-  picfw_bool_t link_up;
 } picfw_w5500_t;
 
 /* --- API --- */
