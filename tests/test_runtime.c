@@ -2850,6 +2850,21 @@ static int test_led_state_machine(void) {
   errors += expect_true(name, led.state == PICFW_LED_NORMAL,
                         "BRIGHT -> NORMAL after 5s (error)");
 
+  /* Dual-flag: both INIT + ERROR simultaneously — ERROR wins (5s),
+   * prev_state must be NORMAL (not corrupted to BRIGHT) */
+  now = 50000u;
+  picfw_led_set_state(&led, PICFW_LED_NORMAL, now);
+  out = picfw_led_service(&led, now,
+                          PICFW_LED_FLAG_INIT_CMD | PICFW_LED_FLAG_ERROR);
+  errors += expect_true(name, led.state == PICFW_LED_BRIGHT,
+                        "dual flags -> BRIGHT");
+  errors += expect_true(name, led.prev_state == PICFW_LED_NORMAL,
+                        "dual flags: prev_state = NORMAL (not BRIGHT)");
+  /* After 5s (ERROR duration), should return to NORMAL */
+  out = picfw_led_service(&led, now + 5000u, 0u);
+  errors += expect_true(name, led.state == PICFW_LED_NORMAL,
+                        "dual flags: BRIGHT -> NORMAL after 5s");
+
   return errors;
 }
 

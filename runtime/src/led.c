@@ -83,19 +83,28 @@ _Static_assert(sizeof(LED_HANDLERS) / sizeof(LED_HANDLERS[0]) ==
 
 /* --- Event flag handling (edge-triggered) --- */
 
+/* Handle edge-triggered event flags.  Save prev_state ONCE before any
+ * flag processing to prevent corruption when both flags fire in the same
+ * call (ERROR would read state=BRIGHT set by INIT, latching prev_state
+ * to BRIGHT and causing a permanent stuck state). */
 static void led_handle_flags(picfw_led_t *led, uint32_t now_ms,
                               uint8_t flags) {
-  if ((flags & PICFW_LED_FLAG_INIT_CMD) != 0u) {
-    led->prev_state = led->state;
-    led->state = PICFW_LED_BRIGHT;
-    led->deadline_ms = now_ms + PICFW_LED_BRIGHT_INIT_MS;
-    led->toggle = 1u;
+  uint8_t saved;
+
+  if ((flags & (PICFW_LED_FLAG_INIT_CMD | PICFW_LED_FLAG_ERROR)) == 0u) {
+    return;
   }
+
+  saved = led->state;
+  led->prev_state = saved;
+  led->state = PICFW_LED_BRIGHT;
+  led->toggle = 1u;
+
+  /* ERROR takes priority over INIT (longer duration, more severe) */
   if ((flags & PICFW_LED_FLAG_ERROR) != 0u) {
-    led->prev_state = led->state;
-    led->state = PICFW_LED_BRIGHT;
     led->deadline_ms = now_ms + PICFW_LED_BRIGHT_ERROR_MS;
-    led->toggle = 1u;
+  } else {
+    led->deadline_ms = now_ms + PICFW_LED_BRIGHT_INIT_MS;
   }
 }
 
