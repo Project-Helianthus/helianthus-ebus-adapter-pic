@@ -89,7 +89,9 @@ void picfw_pic16f15356_hal_set_uart_mode(picfw_pic16f15356_hal_t *hal, picfw_pic
   hal->regs.tx1sta = PICFW_PIC16F15356_APP_EUSART_TX1STA_INIT;
   hal->uart_mode = mode;
 
-  if (mode == PICFW_PIC16F15356_UART_MODE_HIGH_SPEED) {
+  if (mode == PICFW_PIC16F15356_UART_MODE_VERY_HIGH_SPEED) {
+    spbrg = PICFW_PIC16F15356_APP_EUSART_VERY_HIGH_SPEED_SPBRG;
+  } else if (mode == PICFW_PIC16F15356_UART_MODE_HIGH_SPEED) {
     spbrg = PICFW_PIC16F15356_APP_EUSART_HIGH_SPEED_SPBRG;
   } else {
     spbrg = PICFW_PIC16F15356_APP_EUSART_DEFAULT_SPBRG;

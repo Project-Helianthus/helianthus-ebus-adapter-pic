@@ -2747,6 +2747,43 @@ static int test_signal_detect_gates_status_emission(void) {
   return errors;
 }
 
+static int test_921600_baud_mode(void) {
+  const char *name = "921600_baud_mode";
+  picfw_pic16f15356_hal_t hal;
+  uint16_t spbrg;
+  uint32_t actual_baud;
+  int errors = 0;
+
+  picfw_pic16f15356_hal_runtime_init(&hal);
+
+  /* Set very-high-speed mode */
+  picfw_pic16f15356_hal_set_uart_mode(&hal,
+      PICFW_PIC16F15356_UART_MODE_VERY_HIGH_SPEED);
+  spbrg = picfw_pic16f15356_hal_current_spbrg(&hal);
+  errors += expect_true(name, spbrg == 0x0008u,
+                        "SPBRG = 0x0008 for 921600 baud");
+
+  /* Verify actual baud within 4% of nominal */
+  actual_baud = picfw_pic16f15356_app_eusart_async_baud(spbrg);
+  errors += expect_true(name, actual_baud > 880000u && actual_baud < 960000u,
+                        "actual baud within 4% of 921600");
+
+  /* EUSART2 mirrors EUSART1 */
+  errors += expect_true(name,
+      hal.regs.sp2brgl == hal.regs.sp1brgl &&
+      hal.regs.sp2brgh == hal.regs.sp1brgh,
+      "EUSART2 mirrors EUSART1 baud");
+
+  /* Switch back to default */
+  picfw_pic16f15356_hal_set_uart_mode(&hal,
+      PICFW_PIC16F15356_UART_MODE_DEFAULT);
+  spbrg = picfw_pic16f15356_hal_current_spbrg(&hal);
+  errors += expect_true(name, spbrg == 0x0340u,
+                        "SPBRG back to 0x0340 after mode switch");
+
+  return errors;
+}
+
 static int test_j11_bootloader_entry(void) {
   const char *name = "j11_bootloader_entry";
   picfw_pic16f15356_hal_t hal;
@@ -3352,6 +3389,9 @@ int main(void) {
     return 1;
   }
   if (test_wifi_check_startup_gate() != 0) {
+    return 1;
+  }
+  if (test_921600_baud_mode() != 0) {
     return 1;
   }
   if (test_j11_bootloader_entry() != 0) {
