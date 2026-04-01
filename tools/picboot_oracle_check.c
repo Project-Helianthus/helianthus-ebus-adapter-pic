@@ -910,6 +910,12 @@ int main(int argc, char **argv) {
         return rc;
     }
 
+    /* Verify bootloader LED is active on init */
+    if (!bootloader.led_active) {
+        fprintf(stderr, "[FAIL] bootloader LED not active on init\n");
+        return 1;
+    }
+
     puts("picboot oracle check passed");
     return 0;
 }

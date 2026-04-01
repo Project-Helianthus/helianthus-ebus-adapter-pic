@@ -139,6 +139,7 @@ typedef struct picboot_bootloader {
     bool application_running;
     uint16_t application_entry;
     uint32_t reset_counter;
+    bool led_active;  /* LED2 bright on bootloader entry (RC6 HIGH) */
 } picboot_bootloader_t;
 
 void picboot_frame_clear(picboot_frame_t *frame);
