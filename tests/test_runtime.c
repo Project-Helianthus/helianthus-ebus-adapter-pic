@@ -2747,6 +2747,59 @@ static int test_signal_detect_gates_status_emission(void) {
   return errors;
 }
 
+static int test_j11_bootloader_entry(void) {
+  const char *name = "j11_bootloader_entry";
+  picfw_pic16f15356_hal_t hal;
+  int errors = 0;
+
+  /* Default init: RB6=1, RB7=1 (simulation default 0xC2) — normal boot */
+  picfw_pic16f15356_hal_runtime_init(&hal);
+  errors += expect_true(name, hal.bootloader_entry == PICFW_FALSE,
+                        "default init: no bootloader entry");
+
+  /* Verify pin reading logic directly: both LOW = bootloader */
+  hal.latches.portb_input = 0x02u; /* RB1=1, RB6=0, RB7=0 */
+  errors += expect_true(name,
+      picfw_pic16f15356_hal_read_pin(&hal, PICFW_PIN_J11_PGC_PORT,
+                                      PICFW_PIN_J11_PGC_BIT) == PICFW_FALSE,
+      "RB6 reads LOW when portb bit 6 clear");
+  errors += expect_true(name,
+      picfw_pic16f15356_hal_read_pin(&hal, PICFW_PIN_J11_PGD_PORT,
+                                      PICFW_PIN_J11_PGD_BIT) == PICFW_FALSE,
+      "RB7 reads LOW when portb bit 7 clear");
+
+  /* Both HIGH = normal */
+  hal.latches.portb_input = 0xC2u; /* RB1=1, RB6=1, RB7=1 */
+  errors += expect_true(name,
+      picfw_pic16f15356_hal_read_pin(&hal, PICFW_PIN_J11_PGC_PORT,
+                                      PICFW_PIN_J11_PGC_BIT) == PICFW_TRUE,
+      "RB6 reads HIGH when portb bit 6 set");
+
+  /* Only PGC low — not bootloader (need BOTH) */
+  hal.latches.portb_input = 0x82u; /* RB6=0, RB7=1 */
+  {
+    picfw_bool_t pgc = picfw_pic16f15356_hal_read_pin(
+        &hal, PICFW_PIN_J11_PGC_PORT, PICFW_PIN_J11_PGC_BIT);
+    picfw_bool_t pgd = picfw_pic16f15356_hal_read_pin(
+        &hal, PICFW_PIN_J11_PGD_PORT, PICFW_PIN_J11_PGD_BIT);
+    errors += expect_true(name, !(!pgc && !pgd),
+                          "only PGC low: no bootloader entry");
+  }
+
+  /* Only PGD low — not bootloader */
+  hal.latches.portb_input = 0x42u; /* RB6=1, RB7=0 */
+  {
+    picfw_bool_t pgc = picfw_pic16f15356_hal_read_pin(
+        &hal, PICFW_PIN_J11_PGC_PORT, PICFW_PIN_J11_PGC_BIT);
+    picfw_bool_t pgd = picfw_pic16f15356_hal_read_pin(
+        &hal, PICFW_PIN_J11_PGD_PORT, PICFW_PIN_J11_PGD_BIT);
+    errors += expect_true(name, !(!pgc && !pgd),
+                          "only PGD low: no bootloader entry");
+  }
+
+  return errors;
+}
+
 static int test_wifi_check_startup_gate(void) {
   const char *name = "wifi_check_startup_gate";
   picfw_pic16f15356_app_t app;
@@ -3299,6 +3352,9 @@ int main(void) {
     return 1;
   }
   if (test_wifi_check_startup_gate() != 0) {
+    return 1;
+  }
+  if (test_j11_bootloader_entry() != 0) {
     return 1;
   }
   printf("runtime tests passed\n");
