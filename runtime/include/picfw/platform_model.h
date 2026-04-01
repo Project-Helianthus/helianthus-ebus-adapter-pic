@@ -48,6 +48,10 @@
 #define PICFW_PIN_LED2_PORT PICFW_PORT_C
 #define PICFW_PIN_LED2_BIT  6u
 
+/* WiFi-check: RB0 (J12 Pin 4, Wemos D1 mini readiness signal) */
+#define PICFW_PIN_WIFI_CHECK_PORT PICFW_PORT_B
+#define PICFW_PIN_WIFI_CHECK_BIT  0u
+
 /* Signal-detect: RB1/INT (external interrupt, eBUS transceiver presence) */
 #define PICFW_PIN_SIGNAL_DETECT_PORT PICFW_PORT_B
 #define PICFW_PIN_SIGNAL_DETECT_BIT  1u

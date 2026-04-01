@@ -2747,6 +2747,91 @@ static int test_signal_detect_gates_status_emission(void) {
   return errors;
 }
 
+static int test_wifi_check_startup_gate(void) {
+  const char *name = "wifi_check_startup_gate";
+  picfw_pic16f15356_app_t app;
+  picfw_runtime_config_t config;
+  uint8_t tx[PICFW_RUNTIME_HOST_TX_CAP];
+  size_t tx_len;
+  int errors = 0;
+  uint16_t tick;
+
+  picfw_runtime_config_init_default(&config);
+  config.status_emit_enabled = PICFW_TRUE;
+  config.init_features = 0x01u;
+
+  /* --- WiFi variant: startup should be gated --- */
+  picfw_pic16f15356_app_init(&app, &config);
+  /* Directly set WiFi variant state (strap decode tested in test_gpio) */
+  app.hal.wifi_variant = PICFW_TRUE;
+  app.hal.wifi_ready = PICFW_FALSE;
+  picfw_led_set_state(&app.hal.led, PICFW_LED_BLINK_SLOW, 0u);
+
+  errors += expect_true(name, app.hal.wifi_variant == PICFW_TRUE,
+                        "WiFi variant detected from straps");
+  errors += expect_true(name, app.hal.wifi_ready == PICFW_FALSE,
+                        "WiFi not ready at init");
+  errors += expect_true(name, app.hal.led.state == PICFW_LED_BLINK_SLOW,
+                        "LED blinks slow while waiting");
+
+  /* Send INIT — should NOT be processed (gate blocks runtime_step) */
+  picfw_pic16f15356_app_isr_host_rx(&app, 0xC0u);
+  picfw_pic16f15356_app_isr_host_rx(&app, 0x81u);
+  for (tick = 0u; tick <= PICFW_PIC16F15356_TMR0_ISR_DIVIDER; ++tick) {
+    picfw_pic16f15356_app_isr_tmr0(&app);
+  }
+  picfw_pic16f15356_app_mainline_service(&app);
+  tx_len = picfw_pic16f15356_app_drain_host_tx(&app, tx, sizeof(tx));
+  errors += expect_true(name, tx_len == 0u,
+                        "no TX output while WiFi gate active");
+
+  /* Wemos becomes ready: set RB0 HIGH */
+  app.hal.latches.portb_input |= 0x01u; /* RB0=1 */
+  for (tick = 0u; tick <= PICFW_PIC16F15356_TMR0_ISR_DIVIDER; ++tick) {
+    picfw_pic16f15356_app_isr_tmr0(&app);
+  }
+  picfw_pic16f15356_app_mainline_service(&app);
+  errors += expect_true(name, app.hal.wifi_ready == PICFW_TRUE,
+                        "WiFi ready after RB0 HIGH");
+  errors += expect_true(name, app.hal.led.state == PICFW_LED_FADE_UP,
+                        "LED transitions to FADE_UP");
+
+  /* Now runtime_step should run — re-send INIT */
+  picfw_pic16f15356_app_isr_host_rx(&app, 0xC0u);
+  picfw_pic16f15356_app_isr_host_rx(&app, 0x81u);
+  for (tick = 0u; tick <= PICFW_PIC16F15356_TMR0_ISR_DIVIDER; ++tick) {
+    picfw_pic16f15356_app_isr_tmr0(&app);
+  }
+  picfw_pic16f15356_app_mainline_service(&app);
+  tx_len = picfw_pic16f15356_app_drain_host_tx(&app, tx, sizeof(tx));
+  errors += expect_true(name, tx_len > 0u,
+                        "INIT processed after WiFi ready");
+
+  /* --- Non-WiFi variant: no gate --- */
+  picfw_pic16f15356_app_init(&app, &config);
+  /* Default straps: RA0=1,RA1=1 = RPi/USB (not WiFi) */
+  errors += expect_true(name, app.hal.wifi_variant == PICFW_FALSE,
+                        "non-WiFi variant (RPi/USB)");
+
+  /* INIT should be processed immediately */
+  picfw_pic16f15356_app_isr_host_rx(&app, 0xC0u);
+  picfw_pic16f15356_app_isr_host_rx(&app, 0x81u);
+  for (tick = 0u; tick <= PICFW_PIC16F15356_TMR0_ISR_DIVIDER; ++tick) {
+    picfw_pic16f15356_app_isr_tmr0(&app);
+  }
+  picfw_pic16f15356_app_mainline_service(&app);
+  tx_len = picfw_pic16f15356_app_drain_host_tx(&app, tx, sizeof(tx));
+  errors += expect_true(name, tx_len > 0u,
+                        "non-WiFi: INIT processed immediately");
+
+  /* wifi_check null guard */
+  errors += expect_true(name,
+                        picfw_pic16f15356_hal_wifi_check(0) == PICFW_FALSE,
+                        "wifi_check null guard");
+
+  return errors;
+}
+
 static int test_led_state_machine(void) {
   const char *name = "led_state_machine";
   picfw_led_t led;
@@ -3200,6 +3285,9 @@ int main(void) {
     return 1;
   }
   if (test_led_state_machine() != 0) {
+    return 1;
+  }
+  if (test_wifi_check_startup_gate() != 0) {
     return 1;
   }
   printf("runtime tests passed\n");
