@@ -2796,7 +2796,13 @@ static int test_wifi_check_startup_gate(void) {
   errors += expect_true(name, app.hal.led.state == PICFW_LED_FADE_UP,
                         "LED transitions to FADE_UP");
 
-  /* Now runtime_step should run — re-send INIT */
+  /* Gap 3 fix: the INIT bytes queued during gate should now be processed.
+   * The gate-lift mainline_service call delivered the queued bytes. */
+  tx_len = picfw_pic16f15356_app_drain_host_tx(&app, tx, sizeof(tx));
+  errors += expect_true(name, tx_len > 0u,
+                        "queued INIT processed on gate lift");
+
+  /* Also verify a fresh INIT works post-gate */
   picfw_pic16f15356_app_isr_host_rx(&app, 0xC0u);
   picfw_pic16f15356_app_isr_host_rx(&app, 0x81u);
   for (tick = 0u; tick <= PICFW_PIC16F15356_TMR0_ISR_DIVIDER; ++tick) {
@@ -2805,7 +2811,7 @@ static int test_wifi_check_startup_gate(void) {
   picfw_pic16f15356_app_mainline_service(&app);
   tx_len = picfw_pic16f15356_app_drain_host_tx(&app, tx, sizeof(tx));
   errors += expect_true(name, tx_len > 0u,
-                        "INIT processed after WiFi ready");
+                        "fresh INIT also processed after WiFi ready");
 
   /* --- Non-WiFi variant: no gate --- */
   picfw_pic16f15356_app_init(&app, &config);
@@ -2823,6 +2829,11 @@ static int test_wifi_check_startup_gate(void) {
   tx_len = picfw_pic16f15356_app_drain_host_tx(&app, tx, sizeof(tx));
   errors += expect_true(name, tx_len > 0u,
                         "non-WiFi: INIT processed immediately");
+
+  /* Note: runtime_init WiFi path (strap→wifi_variant→LED BLINK_SLOW) cannot
+   * be tested from outside because runtime_init resets porta_input to 0x33u
+   * before reading straps. Strap decode is covered in test_gpio_and_pin_model.
+   * The wifi_variant = (variant == WIFI) comparison is trivially correct. */
 
   /* wifi_check null guard */
   errors += expect_true(name,
