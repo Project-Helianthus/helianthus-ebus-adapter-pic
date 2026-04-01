@@ -2781,6 +2781,112 @@ static int test_gpio_and_pin_model(void) {
   errors += expect_true(name, hal.latches.bus_tx_ready == PICFW_TRUE,
                         "bus_tx_ready set by ISR");
 
+  /* TX ISR null guards */
+  picfw_pic16f15356_isr_latch_host_tx_ready(0);
+  picfw_pic16f15356_isr_latch_bus_tx_ready(0);
+  /* (no crash = pass) */
+
+  /* TX-ready consumption by mainline service */
+  {
+    picfw_pic16f15356_app_t app;
+    picfw_runtime_config_t cfg;
+    picfw_runtime_config_init_default(&cfg);
+    picfw_pic16f15356_app_init(&app, &cfg);
+    picfw_pic16f15356_isr_latch_host_tx_ready(&app.hal);
+    picfw_pic16f15356_isr_latch_bus_tx_ready(&app.hal);
+    errors += expect_true(name, app.hal.latches.host_tx_ready == PICFW_TRUE,
+                          "host_tx_ready before service");
+    /* Trigger a mainline service cycle */
+    picfw_pic16f15356_isr_latch_tmr0(&app.hal);
+    app.hal.latches.scheduler_subticks = PICFW_PIC16F15356_TMR0_ISR_DIVIDER;
+    picfw_pic16f15356_isr_latch_tmr0(&app.hal);
+    picfw_pic16f15356_app_mainline_service(&app);
+    errors += expect_true(name, app.hal.latches.host_tx_ready == PICFW_FALSE,
+                          "host_tx_ready cleared after service");
+    errors += expect_true(name, app.hal.latches.bus_tx_ready == PICFW_FALSE,
+                          "bus_tx_ready cleared after service");
+  }
+
+  /* App-level TX ISR wrappers */
+  {
+    picfw_pic16f15356_app_t app;
+    picfw_runtime_config_t cfg;
+    picfw_runtime_config_init_default(&cfg);
+    picfw_pic16f15356_app_init(&app, &cfg);
+    picfw_pic16f15356_app_isr_host_tx_ready(&app);
+    errors += expect_true(name, app.hal.latches.host_tx_ready == PICFW_TRUE,
+                          "app host_tx_ready forwarded");
+    picfw_pic16f15356_app_isr_bus_tx_ready(&app);
+    errors += expect_true(name, app.hal.latches.bus_tx_ready == PICFW_TRUE,
+                          "app bus_tx_ready forwarded");
+    /* Null guards */
+    picfw_pic16f15356_app_isr_host_tx_ready(0);
+    picfw_pic16f15356_app_isr_bus_tx_ready(0);
+  }
+
+  /* PPS constants (DS40001866 Table 15-2) */
+  errors += expect_true(name, PICFW_PPS_EUSART1_TX == 0x0Fu,
+                        "PPS TX1/CK1 = 0x0F per datasheet");
+  errors += expect_true(name, PICFW_PPS_EUSART2_TX == 0x11u,
+                        "PPS TX2/CK2 = 0x11 per datasheet");
+
+  /* GPIO edge cases */
+  errors += expect_true(name,
+                        picfw_pic16f15356_hal_read_pin(&hal, 99u, 0u) == PICFW_FALSE,
+                        "read_pin invalid port returns false");
+  errors += expect_true(name,
+                        picfw_pic16f15356_hal_read_pin(&hal, PICFW_PORT_A, 8u) == PICFW_FALSE,
+                        "read_pin bit>7 returns false");
+  picfw_pic16f15356_hal_write_pin(&hal, 99u, 0u, PICFW_TRUE); /* no crash */
+  picfw_pic16f15356_hal_write_pin(&hal, PICFW_PORT_A, 8u, PICFW_TRUE); /* no crash */
+  picfw_pic16f15356_hal_write_pin(0, PICFW_PORT_A, 0u, PICFW_TRUE); /* null guard */
+
+  /* GPIO read Port C */
+  hal.latches.portc_input = 0x01u; /* RC0=1 */
+  errors += expect_true(name,
+                        picfw_pic16f15356_hal_read_pin(&hal, PICFW_PORT_C, 0u) == PICFW_TRUE,
+                        "read RC0 high");
+  errors += expect_true(name,
+                        picfw_pic16f15356_hal_read_pin(&hal, PICFW_PORT_C, 1u) == PICFW_FALSE,
+                        "read RC1 low");
+
+  /* GPIO write Port A and Port C */
+  picfw_pic16f15356_hal_write_pin(&hal, PICFW_PORT_A, 3u, PICFW_TRUE);
+  errors += expect_true(name, (hal.regs.lata & 0x08u) != 0u, "write LATA bit 3");
+  picfw_pic16f15356_hal_write_pin(&hal, PICFW_PORT_C, 1u, PICFW_TRUE);
+  errors += expect_true(name, (hal.regs.latc & 0x02u) != 0u, "write LATC bit 1");
+
+  /* Strap: WIFI variant (A low, B high) */
+  hal.latches.porta_input = 0x32u; /* RA0=0, RA1=1, RA4=1, RA5=1 */
+  picfw_pic16f15356_hal_read_straps(&hal, &straps);
+  errors += expect_true(name, straps.variant == 1u,
+                        "strap: WIFI variant (A low, B high)");
+
+  /* Strap: standard protocol (RA4 low) */
+  hal.latches.porta_input = 0x23u; /* RA0=1, RA1=1, RA4=0, RA5=1 */
+  picfw_pic16f15356_hal_read_straps(&hal, &straps);
+  errors += expect_true(name, straps.enhanced_protocol == PICFW_FALSE,
+                        "strap: standard protocol (RA4 low)");
+
+  /* Strap: null HAL guard (output pre-zeroed) */
+  memset(&straps, 0xFF, sizeof(straps));
+  picfw_pic16f15356_hal_read_straps(0, &straps);
+  errors += expect_true(name, straps.enhanced_protocol == PICFW_FALSE,
+                        "strap: null HAL zeroes output");
+
+  /* PPS null guard */
+  picfw_pic16f15356_hal_configure_pps(0); /* no crash */
+
+  /* Strap defaults after fresh init (should be enhanced/normal/RPi) */
+  picfw_pic16f15356_hal_runtime_init(&hal);
+  picfw_pic16f15356_hal_read_straps(&hal, &straps);
+  errors += expect_true(name, straps.enhanced_protocol == PICFW_TRUE,
+                        "fresh init strap: enhanced protocol");
+  errors += expect_true(name, straps.high_speed == PICFW_FALSE,
+                        "fresh init strap: normal speed");
+  errors += expect_true(name, straps.variant == 0u,
+                        "fresh init strap: RPi/USB");
+
   return errors;
 }
 

@@ -133,7 +133,8 @@ void picfw_pic16f15356_hal_runtime_init(picfw_pic16f15356_hal_t *hal) {
   /* PPS routing for EUSART1/2 */
   picfw_pic16f15356_hal_configure_pps(hal);
 
-  /* Simulation: default signal-detect high (bus present) */
+  /* Simulation defaults: pull-up high on strap and signal-detect inputs */
+  hal->latches.porta_input = 0x33u; /* RA0,RA1,RA4,RA5 high (straps open) */
   hal->latches.portb_input = 0x02u; /* RB1=1 (signal present) */
 }
 
@@ -242,6 +243,9 @@ picfw_bool_t picfw_pic16f15356_mainline_service(picfw_pic16f15356_hal_t *hal, pi
 
   picfw_runtime_step(runtime, hal->runtime_now_ms);
   hal->runtime_step_count++;
+  /* Consume TX-ready flags (set by ISR, cleared by mainline flush cycle) */
+  hal->latches.host_tx_ready = PICFW_FALSE;
+  hal->latches.bus_tx_ready = PICFW_FALSE;
   picfw_pic16f15356_mainline_flush_host_tx(hal, runtime);
   return PICFW_TRUE;
 }
@@ -345,6 +349,11 @@ void picfw_pic16f15356_hal_read_straps(const picfw_pic16f15356_hal_t *hal,
   picfw_bool_t variant_a;
   picfw_bool_t variant_b;
 
+  if (straps != 0) {
+    straps->enhanced_protocol = PICFW_FALSE;
+    straps->high_speed = PICFW_FALSE;
+    straps->variant = 0u;
+  }
   if (hal == 0 || straps == 0) {
     return;
   }

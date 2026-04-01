@@ -80,9 +80,9 @@
 #define PICFW_PIN_SPI2_SEL_PORT  PICFW_PORT_C
 #define PICFW_PIN_SPI2_SEL_BIT   5u   /* RC5/SEL2 */
 
-/* PPS routing values (PIC16F15356 datasheet Table 15-1/15-2) */
-#define PICFW_PPS_EUSART1_TX 0x09u  /* RxyPPS value for EUSART1 TX output */
-#define PICFW_PPS_EUSART2_TX 0x0Bu  /* RxyPPS value for EUSART2 TX output */
+/* PPS routing values (PIC16F15356 datasheet DS40001866 Table 15-2) */
+#define PICFW_PPS_EUSART1_TX 0x0Fu  /* RxyPPS value for TX1/CK1 output */
+#define PICFW_PPS_EUSART2_TX 0x11u  /* RxyPPS value for TX2/CK2 output */
 #define PICFW_PPS_RB2_INPUT  0x0Au  /* RX1PPS value for RB2 input */
 #define PICFW_PPS_RC0_INPUT  0x10u  /* RX2PPS value for RC0 input */
 
