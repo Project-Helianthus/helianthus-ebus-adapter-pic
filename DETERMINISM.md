@@ -23,7 +23,7 @@ The checks scan these directories:
 | R5 | No __delay in critical paths | Skipped* | Context-aware scan |
 | R6 | No float/double/math.h | Yes | Pattern scan |
 | R7 | No variable-length arrays | Yes | Pattern scan (with R2) |
-| R8 | Cyclomatic complexity < 15 per function | Yes | Decision point counting |
+| R8 | Cyclomatic complexity < 10 per function | Yes | Decision point counting |
 | R9 | Hardware timers for temporal decisions | Manual | Code review |
 | R10 | Ring buffers power-of-2, bitmask indexing | Manual | Code review |
 
@@ -76,6 +76,6 @@ The eBUS protocol FSM must be implemented as a flat `switch/case` on an enum sta
 
 **Permitted patterns:**
 - `const` dispatch tables with validated index -- these provide O(1) deterministic dispatch with constant WCET, superior to large switch/case cascades
-- Static function pointer arrays in ROM (never mutated)
+- Static `const` function pointer arrays (placed in ROM by the compiler; the `const` qualifier prevents mutation)
 
 No other exceptions exist. If a rule seems too restrictive for your use case, the code design needs to change -- not the rule.

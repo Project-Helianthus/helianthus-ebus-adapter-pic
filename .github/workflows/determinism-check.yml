@@ -71,8 +71,8 @@ jobs:
       - name: R8 — Cyclomatic Complexity
         id: complexity
         run: |
-          python3 scripts/check_complexity.py runtime/src --max=35
-          python3 scripts/check_complexity.py bootloader/src --max=35
+          python3 scripts/check_complexity.py runtime/src --max=10
+          python3 scripts/check_complexity.py bootloader/src --max=10
 
       # NOTE: ISR constraints (R4), blocking delays (R5), and WCET checks
       # are skipped. The firmware uses a HAL simulation model, not
@@ -126,7 +126,7 @@ jobs:
           echo "| R2/R7 | No malloc/VLA | ${{ steps.malloc.outcome == 'success' && 'PASS' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| R3 | Bounded Loops | ${{ steps.loops.outcome == 'success' && 'PASS' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| R6 | No Float | ${{ steps.float.outcome == 'success' && 'PASS' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| R8 | Complexity <35 | ${{ steps.complexity.outcome == 'success' && 'PASS' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| R8 | Complexity <10 | ${{ steps.complexity.outcome == 'success' && 'PASS' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Lint | cppcheck | ${{ steps.lint.outcome == 'success' && 'PASS' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "ISR (R4), delays (R5), WCET checks skipped (HAL simulation model)." >> $GITHUB_STEP_SUMMARY

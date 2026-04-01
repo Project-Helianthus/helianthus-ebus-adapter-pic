@@ -49,7 +49,7 @@ for dir in $SRC_DIRS; do
     run_check "[R2] No malloc/VLA ($dir)      " python3 scripts/check_no_malloc.py "$dir"
     run_check "[R3] Bounded loops ($dir)      " python3 scripts/check_bounded_loops.py "$dir"
     run_check "[R6] No floating point ($dir)  " python3 scripts/check_no_float.py "$dir"
-    run_check "[R8] Complexity < 15 ($dir)    " python3 scripts/check_complexity.py "$dir" --max=35
+    run_check "[R8] Complexity < 10 ($dir)    " python3 scripts/check_complexity.py "$dir" --max=10
 done
 
 # NOTE: ISR constraints, blocking delays, and WCET checks are skipped.

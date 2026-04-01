@@ -19,9 +19,10 @@ PICBOOT_JSON := $(BUILD_DIR)/picboot_oracle_check.json
 # --- Determinism Checks ---
 SRC_DIRS := runtime/src runtime/include bootloader/src bootloader/include
 PYTHON := python3
-# Threshold lowered from 35 to 15 after refactoring FSM dispatchers and
+# Threshold lowered from 35 to 10 after refactoring FSM dispatchers and
 # protocol validation into const dispatch tables and sub-handler functions.
-MAX_COMPLEXITY := 15
+# Peak CC after refactoring: 9 (four functions tied).
+MAX_COMPLEXITY := 10
 MAX_ISR_CYCLES := 60
 
 .PHONY: build test oracle-check clean \

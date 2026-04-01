@@ -43,6 +43,13 @@ static const uint8_t
         0x01u, 0x33u, 0x35u, 0x36u, 0x3Au, 0x3Bu, 0x03u,
 };
 
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+_Static_assert(sizeof(picfw_runtime_variant_codes) /
+                       sizeof(picfw_runtime_variant_codes[0]) ==
+                   PICFW_RUNTIME_VARIANT_CODE_COUNT,
+               "variant_codes array size must match VARIANT_CODE_COUNT");
+#endif
+
 static void picfw_runtime_event_queue_init(picfw_runtime_event_queue_t *queue) {
   queue->head = 0u;
   queue->tail = 0u;

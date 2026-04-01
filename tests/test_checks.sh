@@ -62,7 +62,7 @@ expect_pass "R1 No recursion"        python3 scripts/check_no_recursion.py runti
 expect_pass "R2 No malloc"           python3 scripts/check_no_malloc.py runtime/src
 expect_pass "R3 Bounded loops"       python3 scripts/check_bounded_loops.py runtime/src
 expect_pass "R6 No float"            python3 scripts/check_no_float.py runtime/src
-expect_pass "R8 Complexity"          python3 scripts/check_complexity.py runtime/src --max=35
+expect_pass "R8 Complexity"          python3 scripts/check_complexity.py runtime/src --max=10
 echo ""
 
 # --- Test against GOOD code (bootloader/src) ---
@@ -71,7 +71,7 @@ expect_pass "R1 No recursion"        python3 scripts/check_no_recursion.py bootl
 expect_pass "R2 No malloc"           python3 scripts/check_no_malloc.py bootloader/src
 expect_pass "R3 Bounded loops"       python3 scripts/check_bounded_loops.py bootloader/src
 expect_pass "R6 No float"            python3 scripts/check_no_float.py bootloader/src
-expect_pass "R8 Complexity"          python3 scripts/check_complexity.py bootloader/src --max=35
+expect_pass "R8 Complexity"          python3 scripts/check_complexity.py bootloader/src --max=10
 echo ""
 
 # --- Test against BAD code (tests/fixtures/) ---
@@ -80,7 +80,7 @@ expect_fail "R1 Recursion detected"  python3 scripts/check_no_recursion.py tests
 expect_fail "R2 malloc detected"     python3 scripts/check_no_malloc.py tests/fixtures/
 expect_fail "R3 Unbounded loops"     python3 scripts/check_bounded_loops.py tests/fixtures/
 expect_fail "R6 Float detected"      python3 scripts/check_no_float.py tests/fixtures/
-expect_fail "R8 High complexity"     python3 scripts/check_complexity.py tests/fixtures/ --max=35
+expect_fail "R8 High complexity"     python3 scripts/check_complexity.py tests/fixtures/ --max=10
 echo ""
 
 # --- Summary ---
