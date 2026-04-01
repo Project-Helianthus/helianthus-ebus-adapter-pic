@@ -2747,6 +2747,81 @@ static int test_signal_detect_gates_status_emission(void) {
   return errors;
 }
 
+static int test_eeprom(void) {
+  const char *name = "eeprom";
+  picfw_eeprom_t ee;
+  uint8_t buf[8];
+  uint8_t count;
+  int errors = 0;
+
+  /* Init: magic bytes + 0xFF fill */
+  picfw_eeprom_init(&ee);
+  errors += expect_true(name, ee.data[0] == 0x55u, "magic byte 0");
+  errors += expect_true(name, ee.data[1] == 0xAAu, "magic byte 1");
+  errors += expect_true(name, ee.data[2] == 0xFFu, "erased state at 2");
+  errors += expect_true(name, ee.data[255] == 0xFFu, "erased state at 255");
+
+  /* Null guards */
+  picfw_eeprom_init(0); /* no crash */
+  errors += expect_true(name, picfw_eeprom_read_byte(0, 0u) == 0xFFu,
+                        "read_byte null returns 0xFF");
+  picfw_eeprom_write_byte(0, 0u, 0x42u); /* no crash */
+  errors += expect_true(name, picfw_eeprom_read_block(0, 0u, buf, 4u) == 0u,
+                        "read_block null ee returns 0");
+  errors += expect_true(name, picfw_eeprom_read_block(&ee, 0u, 0, 4u) == 0u,
+                        "read_block null out returns 0");
+  errors += expect_true(name, picfw_eeprom_write_block(0, 0u, buf, 4u) == 0u,
+                        "write_block null ee returns 0");
+  errors += expect_true(name, picfw_eeprom_write_block(&ee, 0u, 0, 4u) == 0u,
+                        "write_block null data returns 0");
+
+  /* Byte read/write */
+  picfw_eeprom_write_byte(&ee, 0x10u, 0x42u);
+  errors += expect_true(name, picfw_eeprom_read_byte(&ee, 0x10u) == 0x42u,
+                        "write+read byte roundtrip");
+
+  /* Block write/read */
+  {
+    const uint8_t test_data[] = {0xDE, 0xAD, 0xBE, 0xEF};
+    picfw_eeprom_write_block(&ee, 0x20u, test_data, 4u);
+    count = picfw_eeprom_read_block(&ee, 0x20u, buf, 4u);
+    errors += expect_true(name, count == 4u, "block read count");
+    errors += expect_true(name,
+        buf[0] == 0xDE && buf[1] == 0xAD && buf[2] == 0xBE && buf[3] == 0xEF,
+        "block roundtrip data");
+  }
+
+  /* Bounds clamping: read at offset 254, request 4 bytes → get 2 */
+  count = picfw_eeprom_read_block(&ee, 254u, buf, 4u);
+  errors += expect_true(name, count == 2u, "read_block clamps to bounds");
+
+  /* Bounds clamping: write at offset 254, request 4 bytes → write 2 */
+  count = picfw_eeprom_write_block(&ee, 254u, (const uint8_t[]){0x11, 0x22, 0x33, 0x44}, 4u);
+  errors += expect_true(name, count == 2u, "write_block clamps to bounds");
+  errors += expect_true(name, picfw_eeprom_read_byte(&ee, 254u) == 0x11u,
+                        "clamped write at 254");
+  errors += expect_true(name, picfw_eeprom_read_byte(&ee, 255u) == 0x22u,
+                        "clamped write at 255");
+
+  /* Zero-length operations */
+  errors += expect_true(name, picfw_eeprom_read_block(&ee, 0u, buf, 0u) == 0u,
+                        "read_block zero len");
+  errors += expect_true(name, picfw_eeprom_write_block(&ee, 0u, buf, 0u) == 0u,
+                        "write_block zero len");
+
+  /* HAL integration: EEPROM initialized during runtime_init */
+  {
+    picfw_pic16f15356_hal_t hal;
+    picfw_pic16f15356_hal_runtime_init(&hal);
+    errors += expect_true(name, hal.eeprom.data[0] == 0x55u,
+                          "HAL init: EEPROM magic byte 0");
+    errors += expect_true(name, hal.eeprom.data[1] == 0xAAu,
+                          "HAL init: EEPROM magic byte 1");
+  }
+
+  return errors;
+}
+
 static int test_921600_baud_mode(void) {
   const char *name = "921600_baud_mode";
   picfw_pic16f15356_hal_t hal;
@@ -3392,6 +3467,9 @@ int main(void) {
     return 1;
   }
   if (test_921600_baud_mode() != 0) {
+    return 1;
+  }
+  if (test_eeprom() != 0) {
     return 1;
   }
   if (test_j11_bootloader_entry() != 0) {
