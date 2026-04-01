@@ -23,7 +23,8 @@ typedef struct picfw_eeprom {
 /* Initialize EEPROM with default content (magic bytes + 0xFF fill). */
 void picfw_eeprom_init(picfw_eeprom_t *ee);
 
-/* Read a byte from EEPROM. Returns 0xFF on out-of-bounds or NULL. */
+/* Read a byte from EEPROM. Returns 0xFF on NULL (address is always
+ * in-bounds since uint8_t range [0,255] matches the 256-byte array). */
 uint8_t picfw_eeprom_read_byte(const picfw_eeprom_t *ee, uint8_t address);
 
 /* Write a byte to EEPROM. No-op on out-of-bounds or NULL. */
