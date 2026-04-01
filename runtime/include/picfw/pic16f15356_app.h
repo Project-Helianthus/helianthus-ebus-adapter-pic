@@ -12,6 +12,8 @@ void picfw_pic16f15356_app_init(picfw_pic16f15356_app_t *app, const picfw_runtim
 picfw_bool_t picfw_pic16f15356_app_isr_host_rx(picfw_pic16f15356_app_t *app, uint8_t byte);
 picfw_bool_t picfw_pic16f15356_app_isr_bus_rx(picfw_pic16f15356_app_t *app, uint8_t byte);
 void picfw_pic16f15356_app_isr_tmr0(picfw_pic16f15356_app_t *app);
+void picfw_pic16f15356_app_isr_host_tx_ready(picfw_pic16f15356_app_t *app);
+void picfw_pic16f15356_app_isr_bus_tx_ready(picfw_pic16f15356_app_t *app);
 picfw_bool_t picfw_pic16f15356_app_mainline_service(picfw_pic16f15356_app_t *app);
 size_t picfw_pic16f15356_app_drain_host_tx(picfw_pic16f15356_app_t *app, uint8_t *out, size_t out_cap);
 

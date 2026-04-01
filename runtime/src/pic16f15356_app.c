@@ -30,6 +30,20 @@ void picfw_pic16f15356_app_isr_tmr0(picfw_pic16f15356_app_t *app) {
   picfw_pic16f15356_isr_latch_tmr0(&app->hal);
 }
 
+void picfw_pic16f15356_app_isr_host_tx_ready(picfw_pic16f15356_app_t *app) {
+  if (app == 0) {
+    return;
+  }
+  picfw_pic16f15356_isr_latch_host_tx_ready(&app->hal);
+}
+
+void picfw_pic16f15356_app_isr_bus_tx_ready(picfw_pic16f15356_app_t *app) {
+  if (app == 0) {
+    return;
+  }
+  picfw_pic16f15356_isr_latch_bus_tx_ready(&app->hal);
+}
+
 picfw_bool_t picfw_pic16f15356_app_mainline_service(picfw_pic16f15356_app_t *app) {
   if (app == 0) {
     return PICFW_FALSE;
