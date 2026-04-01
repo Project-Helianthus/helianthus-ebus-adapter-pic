@@ -1,6 +1,7 @@
 #ifndef PICFW_PIC16F15356_HAL_H
 #define PICFW_PIC16F15356_HAL_H
 
+#include "eeprom.h"
 #include "led.h"
 #include "runtime.h"
 
@@ -91,6 +92,7 @@ typedef struct picfw_pic16f15356_hal {
   uint32_t runtime_step_count;
   picfw_pic16f15356_uart_mode_t uart_mode;
   picfw_led_t led;
+  picfw_eeprom_t eeprom;
   picfw_bool_t wifi_variant;  /* cached from strap decode at init */
   picfw_bool_t wifi_ready;    /* Wemos readiness: RB0 driven HIGH */
   picfw_bool_t bootloader_entry; /* J11 PGC+PGD both LOW at POR */
