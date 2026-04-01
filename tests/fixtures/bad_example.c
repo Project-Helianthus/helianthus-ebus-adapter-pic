@@ -142,3 +142,30 @@ void overcomplicated_handler(uint8_t cmd, uint8_t sub, uint8_t flag) {
         }
     }
 }
+
+/* STACK: call chain deeper than 14 levels */
+void deep_a(void) { deep_b(); }
+void deep_b(void) { deep_c(); }
+void deep_c(void) { deep_d(); }
+void deep_d(void) { deep_e(); }
+void deep_e(void) { deep_f(); }
+void deep_f(void) { deep_g(); }
+void deep_g(void) { deep_h(); }
+void deep_h(void) { deep_i(); }
+void deep_i(void) { deep_j(); }
+void deep_j(void) { deep_k(); }
+void deep_k(void) { deep_l(); }
+void deep_l(void) { deep_m(); }
+void deep_m(void) { deep_n(); }
+void deep_n(void) { deep_o(); }
+void deep_o(void) { deep_p(); }
+void deep_p(void) { /* leaf at depth 16 */ }
+
+/* R10: non-power-of-two ring buffer with modulo indexing */
+#define BAD_RING_CAP 48
+static uint8_t bad_ring[BAD_RING_CAP];
+static uint8_t bad_idx;
+void bad_ring_push(uint8_t v) {
+    bad_ring[bad_idx] = v;
+    bad_idx = (bad_idx + 1) % BAD_RING_CAP;
+}

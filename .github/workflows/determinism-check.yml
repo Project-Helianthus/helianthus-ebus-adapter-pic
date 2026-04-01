@@ -74,6 +74,24 @@ jobs:
           python3 scripts/check_complexity.py runtime/src --max=10
           python3 scripts/check_complexity.py bootloader/src --max=10
 
+      - name: STACK — Call Stack Depth
+        id: stack
+        run: |
+          python3 scripts/check_stack_depth.py runtime/src runtime/include --max-depth=14
+          python3 scripts/check_stack_depth.py bootloader/src bootloader/include --max-depth=14
+
+      - name: R10 — Buffer Sizes
+        id: buffers
+        run: |
+          python3 scripts/check_buffer_sizes.py runtime/src runtime/include
+          python3 scripts/check_buffer_sizes.py bootloader/src bootloader/include
+
+      - name: GUARD — Include Guards
+        id: guards
+        run: |
+          python3 scripts/check_include_guards.py runtime/include
+          python3 scripts/check_include_guards.py bootloader/include
+
       # NOTE: ISR constraints (R4), blocking delays (R5), and WCET checks
       # are skipped. The firmware uses a HAL simulation model, not
       # __interrupt() or __delay_ms. These will be added when targeting
@@ -127,6 +145,9 @@ jobs:
           echo "| R3 | Bounded Loops | ${{ steps.loops.outcome == 'success' && 'PASS' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| R6 | No Float | ${{ steps.float.outcome == 'success' && 'PASS' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| R8 | Complexity <10 | ${{ steps.complexity.outcome == 'success' && 'PASS' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| STACK | Call Depth <14 | ${{ steps.stack.outcome == 'success' && 'PASS' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| R10 | Buffer Sizes | ${{ steps.buffers.outcome == 'success' && 'PASS' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| GUARD | Include Guards | ${{ steps.guards.outcome == 'success' && 'PASS' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Lint | cppcheck | ${{ steps.lint.outcome == 'success' && 'PASS' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "ISR (R4), delays (R5), WCET checks skipped (HAL simulation model)." >> $GITHUB_STEP_SUMMARY

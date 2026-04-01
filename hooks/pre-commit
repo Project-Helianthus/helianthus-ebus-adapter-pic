@@ -50,6 +50,9 @@ for dir in $SRC_DIRS; do
     run_check "[R3] Bounded loops ($dir)      " python3 scripts/check_bounded_loops.py "$dir"
     run_check "[R6] No floating point ($dir)  " python3 scripts/check_no_float.py "$dir"
     run_check "[R8] Complexity < 10 ($dir)    " python3 scripts/check_complexity.py "$dir" --max=10
+    run_check "[STACK] Depth < 14 ($dir)     " python3 scripts/check_stack_depth.py "$dir" --max-depth=14
+    run_check "[R10] Buffer sizes ($dir)     " python3 scripts/check_buffer_sizes.py "$dir"
+    run_check "[GUARD] Include guards ($dir) " python3 scripts/check_include_guards.py "$dir"
 done
 
 # NOTE: ISR constraints, blocking delays, and WCET checks are skipped.

@@ -70,7 +70,7 @@ static size_t collect_frames(uint8_t *bytes, size_t byte_len,
 static int test_runtime_init_and_info(void) {
   const char *name = "runtime_init_and_info";
   picfw_runtime_t runtime;
-  uint8_t tx[96];
+  uint8_t tx[PICFW_RUNTIME_HOST_TX_CAP];
   picfw_enh_frame_t frames[16];
   size_t tx_len;
   size_t frame_count;
@@ -441,7 +441,7 @@ static int test_pic16f15356_app_shell(void) {
 static int test_runtime_start_send_and_boundary_release(void) {
   const char *name = "runtime_start_send_and_boundary_release";
   picfw_runtime_t runtime;
-  uint8_t tx[96];
+  uint8_t tx[PICFW_RUNTIME_HOST_TX_CAP];
   picfw_enh_frame_t frames[8];
   size_t tx_len;
   size_t frame_count;
@@ -547,7 +547,7 @@ static int test_runtime_start_cancel_and_failure_injection(void) {
   const char *name = "runtime_start_cancel_and_failure_injection";
   picfw_runtime_t runtime;
   picfw_runtime_config_t config;
-  uint8_t tx[96];
+  uint8_t tx[PICFW_RUNTIME_HOST_TX_CAP];
   picfw_enh_frame_t frames[8];
   size_t tx_len;
   size_t frame_count;
@@ -656,7 +656,7 @@ static int test_runtime_periodic_status_and_state(void) {
   const char *name = "runtime_periodic_status_and_state";
   picfw_runtime_t runtime;
   picfw_runtime_config_t config;
-  uint8_t tx[96];
+  uint8_t tx[PICFW_RUNTIME_HOST_TX_CAP];
   picfw_enh_frame_t frames[4];
   size_t tx_len;
   size_t frame_count;
@@ -1992,7 +1992,7 @@ static int test_bus_byte_forwarding_full_range(void) {
 
   for (p = 0u; p < sizeof(probes); ++p) {
     picfw_runtime_t runtime;
-    uint8_t tx[96];
+    uint8_t tx[PICFW_RUNTIME_HOST_TX_CAP];
     picfw_enh_frame_t frames[4];
     size_t tx_len;
     size_t frame_count;
@@ -2033,7 +2033,7 @@ static int test_bus_byte_forwarding_full_range(void) {
 static int test_host_parser_timeout(void) {
   const char *name = "host_parser_timeout";
   picfw_runtime_t runtime;
-  uint8_t tx[96];
+  uint8_t tx[PICFW_RUNTIME_HOST_TX_CAP];
   picfw_enh_frame_t frames[8];
   size_t tx_len;
   size_t frame_count;
@@ -2100,7 +2100,7 @@ static int test_host_parser_timeout(void) {
 static int test_event_queue_overflow(void) {
   const char *name = "event_queue_overflow";
   picfw_runtime_t runtime;
-  uint8_t tx[96];
+  uint8_t tx[PICFW_RUNTIME_HOST_TX_CAP];
   size_t idx;
   size_t total_tx = 0u;
   int errors = 0;
@@ -2137,7 +2137,7 @@ static int test_event_queue_overflow(void) {
 static int test_tx_queue_overflow_and_degraded(void) {
   const char *name = "tx_queue_overflow_and_degraded";
   picfw_runtime_t runtime;
-  uint8_t tx[96];
+  uint8_t tx[PICFW_RUNTIME_HOST_TX_CAP];
   picfw_enh_frame_t frames[4];
   size_t tx_len;
   size_t frame_count;
@@ -2153,31 +2153,18 @@ static int test_tx_queue_overflow_and_degraded(void) {
   /*
    * Fill the TX queue by injecting bus bytes in batches (event queue
    * capacity is 32) and stepping WITHOUT draining. Each bus byte < 0x80
-   * produces 1 TX byte. TX capacity is 96.
+   * produces 1 TX byte. TX capacity is PICFW_RUNTIME_HOST_TX_CAP (128).
    */
-  /* Batch 1: fill event queue (32 events), step to drain into TX */
-  for (idx = 0u; idx < PICFW_RUNTIME_EVENT_QUEUE_CAP; ++idx) {
-    picfw_runtime_isr_enqueue_bus_byte(&runtime, (uint8_t)(idx & 0x7Fu));
+  /* Batches 1-5: fill TX queue beyond capacity */
+  for (idx = 0u; idx < 5u; ++idx) {
+    size_t j;
+    for (j = 0u; j < PICFW_RUNTIME_EVENT_QUEUE_CAP; ++j) {
+      picfw_runtime_isr_enqueue_bus_byte(&runtime, (uint8_t)(j & 0x7Fu));
+    }
+    { size_t k; for (k = 0u; k < 4u; ++k) { picfw_runtime_step(&runtime, 1u); } }
   }
-  for (idx = 0u; idx < 4u; ++idx) {
-    picfw_runtime_step(&runtime, 1u);
-  }
-  /* Batch 2 */
-  for (idx = 0u; idx < PICFW_RUNTIME_EVENT_QUEUE_CAP; ++idx) {
-    picfw_runtime_isr_enqueue_bus_byte(&runtime, (uint8_t)(idx & 0x7Fu));
-  }
-  for (idx = 0u; idx < 4u; ++idx) {
-    picfw_runtime_step(&runtime, 1u);
-  }
-  /* Batch 3 */
-  for (idx = 0u; idx < PICFW_RUNTIME_EVENT_QUEUE_CAP; ++idx) {
-    picfw_runtime_isr_enqueue_bus_byte(&runtime, (uint8_t)(idx & 0x7Fu));
-  }
-  for (idx = 0u; idx < 4u; ++idx) {
-    picfw_runtime_step(&runtime, 1u);
-  }
-  /* TX queue should be full now (96 bytes) — do NOT drain.
-   * Some of batch 3 may have already overflowed. */
+  /* TX queue should be full now — do NOT drain.
+   * Some of batch 5 may have already overflowed. */
 
   /* Enqueue more and step to ensure TX overflow */
   for (idx = 0u; idx < 8u; ++idx) {
@@ -2354,7 +2341,7 @@ static int test_enh_codec_invalid_patterns(void) {
 static int test_multi_session_arbitration_isolation(void) {
   const char *name = "multi_session_arbitration_isolation";
   picfw_runtime_t runtime;
-  uint8_t tx[96];
+  uint8_t tx[PICFW_RUNTIME_HOST_TX_CAP];
   picfw_enh_frame_t frames[8];
   size_t tx_len;
   size_t frame_count;
@@ -2432,7 +2419,7 @@ static int test_multi_session_arbitration_isolation(void) {
 static int test_arbitration_bus_echo_suppression(void) {
   const char *name = "arbitration_bus_echo_suppression";
   picfw_runtime_t runtime;
-  uint8_t tx[96];
+  uint8_t tx[PICFW_RUNTIME_HOST_TX_CAP];
   picfw_enh_frame_t frames[8];
   size_t tx_len;
   size_t frame_count;
@@ -2485,7 +2472,7 @@ static int test_arbitration_bus_echo_suppression(void) {
 static int test_invalid_info_id(void) {
   const char *name = "invalid_info_id";
   picfw_runtime_t runtime;
-  uint8_t tx[96];
+  uint8_t tx[PICFW_RUNTIME_HOST_TX_CAP];
   picfw_enh_frame_t frames[8];
   size_t tx_len;
   size_t frame_count;

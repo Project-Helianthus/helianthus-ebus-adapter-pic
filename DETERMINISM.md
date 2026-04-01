@@ -25,7 +25,9 @@ The checks scan these directories:
 | R7 | No variable-length arrays | Yes | Pattern scan (with R2) |
 | R8 | Cyclomatic complexity < 10 per function | Yes | Decision point counting |
 | R9 | Hardware timers for temporal decisions | Manual | Code review |
-| R10 | Ring buffers power-of-2, bitmask indexing | Manual | Code review |
+| R10 | Ring buffers power-of-2, bitmask indexing | Yes | Buffer size + modulo scan |
+| STACK | Call depth < 14 (16-level HW stack) | Yes | Call graph DFS |
+| GUARD | Header include guards | Yes | Pattern scan |
 
 *R4/R5 checks are available as optional make targets but skipped in `check-all` because the firmware uses a HAL simulation model, not `__interrupt()` or `__delay_ms`. These will be enabled when targeting real PIC hardware.
 
@@ -41,6 +43,9 @@ make check-malloc
 make check-loops
 make check-float
 make check-complexity
+make check-stack-depth
+make check-buffers
+make check-guards
 
 # Optional checks (XC8/hardware-specific, not in check-all)
 make check-isr

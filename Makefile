@@ -27,10 +27,12 @@ MAX_ISR_CYCLES := 60
 
 .PHONY: build test oracle-check clean \
         check-all check-recursion check-malloc check-loops check-float check-complexity \
+        check-stack-depth check-buffers check-guards \
         check-lint check-isr check-delays check-wcet install-hooks
 
 ## Run all determinism checks (enabled subset)
-check-all: check-recursion check-malloc check-loops check-float check-complexity check-lint
+check-all: check-recursion check-malloc check-loops check-float check-complexity \
+           check-stack-depth check-buffers check-guards check-lint
 	@echo ""
 	@echo "============================================"
 	@echo "  ALL DETERMINISM CHECKS PASSED"
@@ -60,6 +62,21 @@ check-float:
 check-complexity:
 	@echo "--- [R8] Cyclomatic complexity ---"
 	@$(PYTHON) scripts/check_complexity.py $(SRC_DIRS) --max=$(MAX_COMPLEXITY)
+
+## STACK: PIC16 call stack depth limit (max 14 of 16 levels)
+check-stack-depth:
+	@echo "--- [STACK] Call stack depth ---"
+	@$(PYTHON) scripts/check_stack_depth.py $(SRC_DIRS) --max-depth=14
+
+## R10: Ring buffer sizes (power-of-2) and bitmask indexing
+check-buffers:
+	@echo "--- [R10] Buffer sizes and indexing ---"
+	@$(PYTHON) scripts/check_buffer_sizes.py $(SRC_DIRS)
+
+## GUARD: Header include guards
+check-guards:
+	@echo "--- [GUARD] Include guards ---"
+	@$(PYTHON) scripts/check_include_guards.py $(SRC_DIRS)
 
 ## Lint: cppcheck static analysis
 check-lint:

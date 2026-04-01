@@ -18,7 +18,7 @@ static picfw_bool_t picfw_pic16f15356_byte_fifo_push(picfw_pic16f15356_byte_fifo
   }
 
   fifo->items[fifo->tail] = value;
-  fifo->tail = (uint8_t)((fifo->tail + 1u) % PICFW_PIC16F15356_ISR_LATCH_CAP);
+  fifo->tail = (uint8_t)((fifo->tail + 1u) & (PICFW_PIC16F15356_ISR_LATCH_CAP - 1u));
   fifo->count++;
   return PICFW_TRUE;
 }
@@ -29,7 +29,7 @@ static picfw_bool_t picfw_pic16f15356_byte_fifo_pop(picfw_pic16f15356_byte_fifo_
   }
 
   *value = fifo->items[fifo->head];
-  fifo->head = (uint8_t)((fifo->head + 1u) % PICFW_PIC16F15356_ISR_LATCH_CAP);
+  fifo->head = (uint8_t)((fifo->head + 1u) & (PICFW_PIC16F15356_ISR_LATCH_CAP - 1u));
   fifo->count--;
   return PICFW_TRUE;
 }

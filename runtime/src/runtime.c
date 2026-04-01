@@ -70,7 +70,7 @@ picfw_runtime_event_queue_push(picfw_runtime_event_queue_t *queue, uint8_t type,
   }
   queue->items[queue->tail].type = type;
   queue->items[queue->tail].value = value;
-  queue->tail = (uint8_t)((queue->tail + 1u) % PICFW_RUNTIME_EVENT_QUEUE_CAP);
+  queue->tail = (uint8_t)((queue->tail + 1u) & (PICFW_RUNTIME_EVENT_QUEUE_CAP - 1u));
   queue->count++;
   return PICFW_TRUE;
 }
@@ -82,7 +82,7 @@ picfw_runtime_event_queue_pop(picfw_runtime_event_queue_t *queue,
     return PICFW_FALSE;
   }
   *event = queue->items[queue->head];
-  queue->head = (uint8_t)((queue->head + 1u) % PICFW_RUNTIME_EVENT_QUEUE_CAP);
+  queue->head = (uint8_t)((queue->head + 1u) & (PICFW_RUNTIME_EVENT_QUEUE_CAP - 1u));
   queue->count--;
   return PICFW_TRUE;
 }
@@ -94,7 +94,7 @@ picfw_runtime_byte_queue_push(picfw_runtime_byte_queue_t *queue,
     return PICFW_FALSE;
   }
   queue->items[queue->tail] = value;
-  queue->tail = (uint8_t)((queue->tail + 1u) % PICFW_RUNTIME_HOST_TX_CAP);
+  queue->tail = (uint8_t)((queue->tail + 1u) & (PICFW_RUNTIME_HOST_TX_CAP - 1u));
   queue->count++;
   return PICFW_TRUE;
 }
@@ -106,7 +106,7 @@ picfw_runtime_byte_queue_pop(picfw_runtime_byte_queue_t *queue,
     return PICFW_FALSE;
   }
   *value = queue->items[queue->head];
-  queue->head = (uint8_t)((queue->head + 1u) % PICFW_RUNTIME_HOST_TX_CAP);
+  queue->head = (uint8_t)((queue->head + 1u) & (PICFW_RUNTIME_HOST_TX_CAP - 1u));
   queue->count--;
   return PICFW_TRUE;
 }
