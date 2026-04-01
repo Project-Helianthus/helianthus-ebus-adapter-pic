@@ -29,31 +29,32 @@ void picfw_eeprom_write_byte(picfw_eeprom_t *ee, uint8_t address,
 
 uint8_t picfw_eeprom_read_block(const picfw_eeprom_t *ee, uint8_t address,
                                  uint8_t *out, uint8_t len) {
-  uint8_t avail;
+  uint16_t avail;
   uint8_t count;
 
   if (ee == 0 || out == 0 || len == 0u) {
     return 0u;
   }
 
-  /* Clamp to EEPROM bounds */
-  avail = (uint8_t)(PICFW_EEPROM_SIZE - address);
-  count = (len < avail) ? len : avail;
+  /* Clamp to EEPROM bounds.  Use uint16_t for avail because
+   * PICFW_EEPROM_SIZE (256) - address(0) = 256, which overflows uint8_t. */
+  avail = (uint16_t)(PICFW_EEPROM_SIZE - (uint16_t)address);
+  count = (len < avail) ? len : (uint8_t)avail;
   memcpy(out, &ee->data[address], count);
   return count;
 }
 
 uint8_t picfw_eeprom_write_block(picfw_eeprom_t *ee, uint8_t address,
                                   const uint8_t *data, uint8_t len) {
-  uint8_t avail;
+  uint16_t avail;
   uint8_t count;
 
   if (ee == 0 || data == 0 || len == 0u) {
     return 0u;
   }
 
-  avail = (uint8_t)(PICFW_EEPROM_SIZE - address);
-  count = (len < avail) ? len : avail;
+  avail = (uint16_t)(PICFW_EEPROM_SIZE - (uint16_t)address);
+  count = (len < avail) ? len : (uint8_t)avail;
   memcpy(&ee->data[address], data, count);
   return count;
 }

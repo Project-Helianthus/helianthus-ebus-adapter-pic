@@ -2803,6 +2803,18 @@ static int test_eeprom(void) {
   errors += expect_true(name, picfw_eeprom_read_byte(&ee, 255u) == 0x22u,
                         "clamped write at 255");
 
+  /* Block read at address 0 (regression: uint8_t(256-0) truncated to 0) */
+  count = picfw_eeprom_read_block(&ee, 0u, buf, 2u);
+  errors += expect_true(name, count == 2u, "read_block at addr 0 returns 2");
+  errors += expect_true(name, buf[0] == 0x55u && buf[1] == 0xAAu,
+                        "read_block at addr 0 gets magic bytes");
+
+  /* Block read at address 255 (single byte boundary) */
+  picfw_eeprom_write_byte(&ee, 255u, 0x77u);
+  count = picfw_eeprom_read_block(&ee, 255u, buf, 4u);
+  errors += expect_true(name, count == 1u, "read_block at addr 255 returns 1");
+  errors += expect_true(name, buf[0] == 0x77u, "read_block at addr 255 data");
+
   /* Zero-length operations */
   errors += expect_true(name, picfw_eeprom_read_block(&ee, 0u, buf, 0u) == 0u,
                         "read_block zero len");
