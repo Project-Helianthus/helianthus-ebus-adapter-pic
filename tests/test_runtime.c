@@ -2685,6 +2685,68 @@ static int test_protocol_dispatch_error_paths(void) {
   return errors;
 }
 
+static int test_signal_detect_gates_status_emission(void) {
+  const char *name = "signal_detect_gates_status";
+  picfw_pic16f15356_app_t app;
+  picfw_runtime_config_t config;
+  uint8_t tx[PICFW_RUNTIME_HOST_TX_CAP];
+  size_t tx_len;
+  int errors = 0;
+  uint16_t tick;
+
+  picfw_runtime_config_init_default(&config);
+  config.status_emit_enabled = PICFW_TRUE;
+  config.status_snapshot_period_ms = 100u;
+  config.status_variant_period_ms = 100u;
+  config.init_features = 0x01u;
+  picfw_pic16f15356_app_init(&app, &config);
+
+  /* Send INIT to reach LIVE_READY state */
+  picfw_pic16f15356_app_isr_host_rx(&app, 0xC0u); /* INIT byte1 */
+  picfw_pic16f15356_app_isr_host_rx(&app, 0x81u); /* INIT byte2 (cmd=0, data=1) */
+  /* Advance one scheduler tick to process INIT */
+  for (tick = 0u; tick <= PICFW_PIC16F15356_TMR0_ISR_DIVIDER; ++tick) {
+    picfw_pic16f15356_app_isr_tmr0(&app);
+  }
+  picfw_pic16f15356_app_mainline_service(&app);
+  /* Drain RESETTED response */
+  picfw_pic16f15356_app_drain_host_tx(&app, tx, sizeof(tx));
+
+  /* Advance time past the status deadline (2 scheduler ticks = 200ms) */
+  for (tick = 0u; tick <= PICFW_PIC16F15356_TMR0_ISR_DIVIDER; ++tick) {
+    picfw_pic16f15356_app_isr_tmr0(&app);
+  }
+  for (tick = 0u; tick <= PICFW_PIC16F15356_TMR0_ISR_DIVIDER; ++tick) {
+    picfw_pic16f15356_app_isr_tmr0(&app);
+  }
+
+  /* Test 1: Bus busy (RB1 HIGH) — status emission should be deferred */
+  app.hal.latches.portb_input = 0x02u; /* RB1=1 = bus busy */
+  picfw_pic16f15356_app_mainline_service(&app);
+  tx_len = picfw_pic16f15356_app_drain_host_tx(&app, tx, sizeof(tx));
+  errors += expect_true(name, tx_len == 0u,
+                        "no status frame when bus busy");
+
+  /* Test 2: Bus idle (RB1 LOW) — status emission should proceed */
+  app.hal.latches.portb_input = 0x00u; /* RB1=0 = bus idle */
+  picfw_pic16f15356_app_mainline_service(&app);
+  tx_len = picfw_pic16f15356_app_drain_host_tx(&app, tx, sizeof(tx));
+  errors += expect_true(name, tx_len > 0u,
+                        "status frame emitted when bus idle");
+
+  /* Test 3: bus_busy field is correctly set from signal detect */
+  app.hal.latches.portb_input = 0x02u;
+  picfw_pic16f15356_app_mainline_service(&app);
+  errors += expect_true(name, app.runtime.bus_busy == PICFW_TRUE,
+                        "bus_busy set when RB1 high");
+  app.hal.latches.portb_input = 0x00u;
+  picfw_pic16f15356_app_mainline_service(&app);
+  errors += expect_true(name, app.runtime.bus_busy == PICFW_FALSE,
+                        "bus_busy cleared when RB1 low");
+
+  return errors;
+}
+
 static int test_gpio_and_pin_model(void) {
   const char *name = "gpio_and_pin_model";
   picfw_pic16f15356_hal_t hal;
@@ -3000,6 +3062,9 @@ int main(void) {
     return 1;
   }
   if (test_gpio_and_pin_model() != 0) {
+    return 1;
+  }
+  if (test_signal_detect_gates_status_emission() != 0) {
     return 1;
   }
   printf("runtime tests passed\n");
