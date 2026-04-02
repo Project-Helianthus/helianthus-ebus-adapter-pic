@@ -1,6 +1,7 @@
 #include "picfw/pic16f15356_app.h"
 #include "picfw/pic16f15356_hal.h"
 #include "picfw/runtime.h"
+#include "picfw/eeprom_layout.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -2747,6 +2748,87 @@ static int test_signal_detect_gates_status_emission(void) {
   return errors;
 }
 
+static int test_eeprom_ip_config(void) {
+  const char *name = "eeprom_ip_config";
+  picfw_eeprom_t ee;
+  picfw_ip_config_t config;
+  picfw_ip_config_t readback;
+  int errors = 0;
+
+  picfw_eeprom_init(&ee);
+
+  /* No config written yet — read should fail (version mismatch) */
+  errors += expect_true(name,
+      picfw_eeprom_read_ip_config(&ee, &readback) == PICFW_FALSE,
+      "empty EEPROM: read fails");
+  errors += expect_true(name, readback.valid == PICFW_FALSE,
+                        "empty EEPROM: config not valid");
+
+  /* Write a valid config */
+  config.ip[0] = 192u; config.ip[1] = 168u;
+  config.ip[2] = 1u;   config.ip[3] = 100u;
+  config.mask[0] = 255u; config.mask[1] = 255u;
+  config.mask[2] = 255u; config.mask[3] = 0u;
+  config.gateway[0] = 192u; config.gateway[1] = 168u;
+  config.gateway[2] = 1u;   config.gateway[3] = 1u;
+  config.dhcp_enabled = PICFW_TRUE;
+  picfw_eeprom_write_ip_config(&ee, &config);
+
+  /* Read back and verify */
+  errors += expect_true(name,
+      picfw_eeprom_read_ip_config(&ee, &readback) == PICFW_TRUE,
+      "valid config: read succeeds");
+  errors += expect_true(name, readback.valid == PICFW_TRUE,
+                        "valid config: marked valid");
+  errors += expect_true(name,
+      readback.ip[0] == 192u && readback.ip[3] == 100u,
+      "IP roundtrip");
+  errors += expect_true(name,
+      readback.mask[0] == 255u && readback.mask[3] == 0u,
+      "mask roundtrip");
+  errors += expect_true(name,
+      readback.gateway[0] == 192u && readback.gateway[3] == 1u,
+      "gateway roundtrip");
+  errors += expect_true(name, readback.dhcp_enabled == PICFW_TRUE,
+                        "DHCP enabled roundtrip");
+
+  /* Corrupt CRC — read should fail */
+  picfw_eeprom_write_byte(&ee, PICFW_EEPROM_CRC_OFFSET, 0x00u);
+  errors += expect_true(name,
+      picfw_eeprom_read_ip_config(&ee, &readback) == PICFW_FALSE,
+      "corrupted CRC: read fails");
+
+  /* Corrupt version — read should fail */
+  picfw_eeprom_write_ip_config(&ee, &config); /* restore valid */
+  picfw_eeprom_write_byte(&ee, PICFW_EEPROM_CFG_VER_OFFSET, 0x99u);
+  errors += expect_true(name,
+      picfw_eeprom_read_ip_config(&ee, &readback) == PICFW_FALSE,
+      "wrong version: read fails");
+
+  /* DHCP disabled */
+  config.dhcp_enabled = PICFW_FALSE;
+  picfw_eeprom_write_ip_config(&ee, &config);
+  picfw_eeprom_read_ip_config(&ee, &readback);
+  errors += expect_true(name, readback.dhcp_enabled == PICFW_FALSE,
+                        "DHCP disabled roundtrip");
+
+  /* Null guards */
+  errors += expect_true(name,
+      picfw_eeprom_read_ip_config(0, &readback) == PICFW_FALSE,
+      "null ee guard");
+  errors += expect_true(name,
+      picfw_eeprom_read_ip_config(&ee, 0) == PICFW_FALSE,
+      "null out guard");
+  picfw_eeprom_write_ip_config(0, &config); /* no crash */
+  picfw_eeprom_write_ip_config(&ee, 0); /* no crash */
+
+  /* CRC function null guard */
+  errors += expect_true(name, picfw_eeprom_ip_config_crc(0) == 0u,
+                        "crc null guard");
+
+  return errors;
+}
+
 static int test_w5500_driver(void) {
   const char *name = "w5500_driver";
   picfw_w5500_t w5500;
@@ -3618,6 +3700,9 @@ int main(void) {
     return 1;
   }
   if (test_921600_baud_mode() != 0) {
+    return 1;
+  }
+  if (test_eeprom_ip_config() != 0) {
     return 1;
   }
   if (test_w5500_driver() != 0) {
