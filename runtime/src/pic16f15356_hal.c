@@ -169,15 +169,19 @@ void picfw_pic16f15356_hal_runtime_init(picfw_pic16f15356_hal_t *hal) {
     hal->bootloader_entry = (picfw_bool_t)(!pgc && !pgd);
   }
 
-  /* Determine WiFi variant from straps and set initial LED state */
+  /* Determine variant from straps and set initial LED state */
   {
     picfw_pic16f15356_straps_t straps;
     picfw_pic16f15356_hal_read_straps(hal, &straps);
     hal->wifi_variant = (picfw_bool_t)(straps.variant == PICFW_VARIANT_WIFI);
+    hal->ethernet_variant =
+        (picfw_bool_t)(straps.variant == PICFW_VARIANT_ETHERNET);
     hal->wifi_ready = PICFW_FALSE;
     if (hal->wifi_variant) {
       picfw_led_set_state(&hal->led, PICFW_LED_BLINK_SLOW, 0u);
     }
+    /* Initialize Ethernet stack (sets state to LINK_WAIT or DISABLED) */
+    picfw_ethernet_init(&hal->ethernet, straps.variant);
   }
 }
 
@@ -339,6 +343,12 @@ picfw_bool_t picfw_pic16f15356_mainline_service(picfw_pic16f15356_hal_t *hal, pi
     led_out = picfw_led_service(&hal->led, hal->runtime_now_ms, led_flags);
     picfw_pic16f15356_hal_write_pin(hal, PICFW_PIN_LED2_PORT,
                                      PICFW_PIN_LED2_BIT, led_out);
+  }
+
+  /* Ethernet stack: service link/DHCP/TCP state machine (Ethernet variant only) */
+  if (hal->ethernet_variant) {
+    picfw_ethernet_service(&hal->ethernet, &hal->w5500, &hal->eeprom,
+                           &hal->led, hal->runtime_now_ms);
   }
 
   picfw_pic16f15356_mainline_flush_host_tx(hal, runtime);
