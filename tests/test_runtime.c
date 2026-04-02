@@ -2857,8 +2857,12 @@ static int test_w5500_driver(void) {
   errors += expect_true(name, picfw_w5500_socket_listen(0) == PICFW_FALSE,
                         "listen null");
   picfw_w5500_socket_close(0); /* no crash */
-  picfw_w5500_set_mac(0, (const uint8_t[]){0}); /* no crash */
-  picfw_w5500_set_ip(0, (const uint8_t[]){0}); /* no crash */
+  {
+    const uint8_t dummy_mac[6] = {0};
+    const uint8_t dummy_ip[4] = {0};
+    picfw_w5500_set_mac(0, dummy_mac); /* no crash */
+    picfw_w5500_set_ip(0, dummy_ip);   /* no crash */
+  }
 
   /* Out-of-bounds address */
   errors += expect_true(name, picfw_w5500_read_common(&w5500, 999u) == 0u,
