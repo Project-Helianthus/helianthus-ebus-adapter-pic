@@ -12,6 +12,8 @@ on:
       - 'runtime/**'
       - 'bootloader/**'
       - 'scripts/**'
+      - 'tests/**'
+      - 'tools/**'
       - 'Makefile'
   push:
     branches: [main]
@@ -20,6 +22,8 @@ on:
       - 'bootloader/**'
       - '.github/workflows/**'
       - 'scripts/**'
+      - 'tests/**'
+      - 'tools/**'
       - 'Makefile'
 
 permissions:
