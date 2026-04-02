@@ -2,6 +2,7 @@
 #include "picfw/pic16f15356_hal.h"
 #include "picfw/runtime.h"
 #include "picfw/eeprom_layout.h"
+#include "picfw/ethernet.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -3578,6 +3579,243 @@ static int test_gpio_and_pin_model(void) {
   return errors;
 }
 
+static int test_ethernet_stack(void) {
+  const char *name = "ethernet_stack";
+  int errors = 0;
+  picfw_ethernet_t eth;
+  picfw_w5500_t w5500;
+  picfw_eeprom_t eeprom;
+  picfw_led_t led;
+  uint8_t seed[3];
+  uint8_t mac[6];
+
+  /* --- Init: Ethernet variant sets LINK_WAIT --- */
+  picfw_ethernet_init(&eth, PICFW_VARIANT_ETHERNET);
+  errors += expect_true(name,
+                        eth.state == PICFW_ETH_STATE_LINK_WAIT,
+                        "init ethernet variant -> LINK_WAIT");
+  errors += expect_true(name,
+                        eth.mac[0] == PICFW_ETH_MAC_OUI_0,
+                        "init sets MAC OUI byte 0");
+  errors += expect_true(name,
+                        eth.mac[1] == PICFW_ETH_MAC_OUI_1,
+                        "init sets MAC OUI byte 1");
+  errors += expect_true(name,
+                        eth.mac[2] == PICFW_ETH_MAC_OUI_2,
+                        "init sets MAC OUI byte 2");
+
+  /* --- Init: non-Ethernet variant sets DISABLED --- */
+  picfw_ethernet_init(&eth, PICFW_VARIANT_WIFI);
+  errors += expect_true(name,
+                        eth.state == PICFW_ETH_STATE_DISABLED,
+                        "init wifi variant -> DISABLED");
+
+  picfw_ethernet_init(&eth, PICFW_VARIANT_RPI_USB);
+  errors += expect_true(name,
+                        eth.state == PICFW_ETH_STATE_DISABLED,
+                        "init rpi variant -> DISABLED");
+
+  /* --- DISABLED state: service is no-op --- */
+  picfw_w5500_init(&w5500);
+  picfw_eeprom_init(&eeprom);
+  picfw_led_init(&led);
+  picfw_ethernet_init(&eth, PICFW_VARIANT_RPI_USB);
+  picfw_ethernet_service(&eth, &w5500, &eeprom, &led, 1000u);
+  errors += expect_true(name,
+                        eth.state == PICFW_ETH_STATE_DISABLED,
+                        "disabled: service stays DISABLED");
+
+  /* --- LINK_WAIT: no link stays in LINK_WAIT, LED blink fast --- */
+  picfw_ethernet_init(&eth, PICFW_VARIANT_ETHERNET);
+  picfw_w5500_init(&w5500);
+  picfw_led_init(&led);
+  /* W5500 link down by default (PHYCFGR bit 0 = 0) */
+  picfw_ethernet_service(&eth, &w5500, &eeprom, &led, 1000u);
+  errors += expect_true(name,
+                        eth.state == PICFW_ETH_STATE_LINK_WAIT,
+                        "link_wait: no link stays LINK_WAIT");
+  errors += expect_true(name,
+                        led.state == PICFW_LED_BLINK_FAST,
+                        "link_wait: LED BLINK_FAST");
+
+  /* --- LINK_WAIT -> DHCP (link up, no valid EEPROM config) --- */
+  /* Simulate link up: set PHYCFGR bit 0 */
+  picfw_w5500_write_common(&w5500, PICFW_W5500_PHYCFGR, 0x01u);
+  picfw_ethernet_service(&eth, &w5500, &eeprom, &led, 2000u);
+  errors += expect_true(name,
+                        eth.state == PICFW_ETH_STATE_DHCP,
+                        "link up -> DHCP (no valid EEPROM config)");
+  errors += expect_true(name,
+                        eth.dhcp_state == PICFW_ETH_DHCP_IDLE,
+                        "DHCP starts IDLE");
+
+  /* --- DHCP: IDLE -> DISCOVERING --- */
+  picfw_ethernet_service(&eth, &w5500, &eeprom, &led, 2100u);
+  errors += expect_true(name,
+                        eth.dhcp_state == PICFW_ETH_DHCP_DISCOVERING,
+                        "DHCP: IDLE -> DISCOVERING");
+  errors += expect_true(name,
+                        led.state == PICFW_LED_BLINK_VERY_FAST,
+                        "DHCP: LED BLINK_VERY_FAST");
+
+  /* --- DHCP: DISCOVERING -> BOUND (simulation) --- */
+  picfw_ethernet_service(&eth, &w5500, &eeprom, &led, 2200u);
+  errors += expect_true(name,
+                        eth.dhcp_state == PICFW_ETH_DHCP_BOUND,
+                        "DHCP: DISCOVERING -> BOUND");
+  errors += expect_true(name,
+                        eth.ip[0] == PICFW_ETH_DHCP_SIM_IP_0,
+                        "DHCP bound: IP byte 0");
+  errors += expect_true(name,
+                        eth.ip[3] == PICFW_ETH_DHCP_SIM_IP_3,
+                        "DHCP bound: IP byte 3");
+
+  /* --- DHCP BOUND -> TCP_LISTEN --- */
+  picfw_ethernet_service(&eth, &w5500, &eeprom, &led, 2300u);
+  errors += expect_true(name,
+                        eth.state == PICFW_ETH_STATE_TCP_LISTEN,
+                        "DHCP BOUND -> TCP_LISTEN");
+  errors += expect_true(name,
+                        led.state == PICFW_LED_FADE_UP,
+                        "TCP_LISTEN: LED FADE_UP");
+
+  /* Verify W5500 has IP configured */
+  errors += expect_true(name,
+                        picfw_w5500_read_common(&w5500, PICFW_W5500_SIPR0) ==
+                            PICFW_ETH_DHCP_SIM_IP_0,
+                        "W5500 IP byte 0 after DHCP");
+
+  /* --- TCP_LISTEN: socket not established stays in TCP_LISTEN --- */
+  picfw_ethernet_service(&eth, &w5500, &eeprom, &led, 3000u);
+  errors += expect_true(name,
+                        eth.state == PICFW_ETH_STATE_TCP_LISTEN,
+                        "TCP_LISTEN: no connection stays");
+
+  /* --- TCP_LISTEN -> TCP_CONNECTED --- */
+  picfw_w5500_write_socket(&w5500, PICFW_W5500_SN_SR,
+                           PICFW_W5500_SN_SR_ESTABLISHED);
+  picfw_ethernet_service(&eth, &w5500, &eeprom, &led, 3100u);
+  errors += expect_true(name,
+                        eth.state == PICFW_ETH_STATE_TCP_CONNECTED,
+                        "TCP_LISTEN -> TCP_CONNECTED");
+
+  /* --- TCP_CONNECTED: peer disconnect -> re-listen --- */
+  picfw_w5500_write_socket(&w5500, PICFW_W5500_SN_SR,
+                           PICFW_W5500_SN_SR_CLOSE_WAIT);
+  picfw_ethernet_service(&eth, &w5500, &eeprom, &led, 3200u);
+  errors += expect_true(name,
+                        eth.state == PICFW_ETH_STATE_TCP_LISTEN,
+                        "TCP_CONNECTED: CLOSE_WAIT -> re-listen");
+
+  /* --- Fixed IP path --- */
+  {
+    picfw_ip_config_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.ip[0] = 10u; cfg.ip[1] = 0u; cfg.ip[2] = 0u; cfg.ip[3] = 50u;
+    cfg.mask[0] = 255u; cfg.mask[1] = 255u; cfg.mask[2] = 255u; cfg.mask[3] = 0u;
+    cfg.gateway[0] = 10u; cfg.gateway[1] = 0u; cfg.gateway[2] = 0u; cfg.gateway[3] = 1u;
+    cfg.dhcp_enabled = PICFW_FALSE;
+    cfg.valid = PICFW_TRUE;
+    picfw_eeprom_write_ip_config(&eeprom, &cfg);
+  }
+
+  picfw_ethernet_init(&eth, PICFW_VARIANT_ETHERNET);
+  picfw_w5500_init(&w5500);
+  picfw_led_init(&led);
+  /* Link up */
+  picfw_w5500_write_common(&w5500, PICFW_W5500_PHYCFGR, 0x01u);
+  picfw_ethernet_service(&eth, &w5500, &eeprom, &led, 1000u);
+  errors += expect_true(name,
+                        eth.state == PICFW_ETH_STATE_FIXED_IP,
+                        "link up + static config -> FIXED_IP");
+
+  picfw_ethernet_service(&eth, &w5500, &eeprom, &led, 1100u);
+  errors += expect_true(name,
+                        eth.state == PICFW_ETH_STATE_TCP_LISTEN,
+                        "FIXED_IP -> TCP_LISTEN");
+  errors += expect_true(name,
+                        eth.ip[0] == 10u && eth.ip[3] == 50u,
+                        "FIXED_IP: correct IP applied");
+  errors += expect_true(name,
+                        picfw_w5500_read_common(&w5500, PICFW_W5500_SIPR0) == 10u,
+                        "FIXED_IP: W5500 IP byte 0");
+
+  /* --- MAC derivation --- */
+  seed[0] = 0xAAu; seed[1] = 0xBBu; seed[2] = 0xCCu;
+  picfw_ethernet_derive_mac(seed, mac);
+  errors += expect_true(name,
+                        mac[0] == PICFW_ETH_MAC_OUI_0 &&
+                        mac[1] == PICFW_ETH_MAC_OUI_1 &&
+                        mac[2] == PICFW_ETH_MAC_OUI_2,
+                        "derive_mac: OUI prefix AE:B0:53");
+  errors += expect_true(name,
+                        mac[3] == 0xAAu && mac[4] == 0xBBu && mac[5] == 0xCCu,
+                        "derive_mac: seed bytes in bytes 3-5");
+
+  /* --- Null guards --- */
+  picfw_ethernet_init(0, PICFW_VARIANT_ETHERNET); /* no crash */
+  picfw_ethernet_service(0, &w5500, &eeprom, &led, 0u); /* no crash */
+  picfw_ethernet_service(&eth, 0, &eeprom, &led, 0u); /* no crash */
+  picfw_ethernet_service(&eth, &w5500, &eeprom, 0, 0u); /* no crash */
+  picfw_ethernet_derive_mac(0, mac); /* no crash */
+  picfw_ethernet_derive_mac(seed, 0); /* no crash */
+
+  /* --- EEPROM null: falls back to DHCP --- */
+  picfw_ethernet_init(&eth, PICFW_VARIANT_ETHERNET);
+  picfw_w5500_init(&w5500);
+  picfw_led_init(&led);
+  picfw_w5500_write_common(&w5500, PICFW_W5500_PHYCFGR, 0x01u);
+  picfw_ethernet_service(&eth, &w5500, 0, &led, 1000u);
+  errors += expect_true(name,
+                        eth.state == PICFW_ETH_STATE_DHCP,
+                        "null eeprom: falls back to DHCP");
+
+  /* --- HAL integration: ethernet_variant set for Ethernet straps ---
+   * runtime_init hardcodes porta_input=0x33 (RPi default).  To test the
+   * Ethernet strap path, we init normally then override porta_input and
+   * re-read straps + re-init ethernet, mirroring what hardware would do
+   * if the physical straps were different at power-on. */
+  {
+    picfw_pic16f15356_hal_t hal;
+    picfw_pic16f15356_straps_t straps;
+    picfw_pic16f15356_hal_runtime_init(&hal);
+    /* Override strap inputs for Ethernet: both A0 and A1 low */
+    hal.latches.porta_input = 0x30u; /* RA0=0, RA1=0, RA4=1, RA5=1 */
+    picfw_pic16f15356_hal_read_straps(&hal, &straps);
+    errors += expect_true(name,
+                          straps.variant == PICFW_VARIANT_ETHERNET,
+                          "HAL: straps decode Ethernet variant");
+    hal.ethernet_variant =
+        (picfw_bool_t)(straps.variant == PICFW_VARIANT_ETHERNET);
+    picfw_ethernet_init(&hal.ethernet, straps.variant);
+    errors += expect_true(name,
+                          hal.ethernet_variant == PICFW_TRUE,
+                          "HAL: ethernet_variant set for Ethernet straps");
+    errors += expect_true(name,
+                          hal.ethernet.state == PICFW_ETH_STATE_LINK_WAIT,
+                          "HAL: ethernet init -> LINK_WAIT");
+  }
+
+  /* --- HAL integration: ethernet_variant FALSE for RPi --- */
+  {
+    picfw_pic16f15356_hal_t hal;
+    picfw_pic16f15356_hal_runtime_init(&hal);
+    errors += expect_true(name,
+                          hal.ethernet_variant == PICFW_FALSE,
+                          "HAL: ethernet_variant FALSE for RPi");
+    errors += expect_true(name,
+                          hal.ethernet.state == PICFW_ETH_STATE_DISABLED,
+                          "HAL: ethernet init -> DISABLED for RPi");
+  }
+
+  if (errors != 0) {
+    fprintf(stderr, "[FAIL] %s: %d errors\n", name, errors);
+  } else {
+    printf("[PASS] %s\n", name);
+  }
+  return errors;
+}
+
 int main(void) {
   if (test_pic16f15356_platform_model() != 0) {
     return 1;
@@ -3715,6 +3953,9 @@ int main(void) {
     return 1;
   }
   if (test_j11_bootloader_entry() != 0) {
+    return 1;
+  }
+  if (test_ethernet_stack() != 0) {
     return 1;
   }
   printf("runtime tests passed\n");

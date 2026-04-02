@@ -2,6 +2,7 @@
 #define PICFW_PIC16F15356_HAL_H
 
 #include "eeprom.h"
+#include "ethernet.h"
 #include "led.h"
 #include "runtime.h"
 #include "w5500.h"
@@ -95,8 +96,10 @@ typedef struct picfw_pic16f15356_hal {
   picfw_led_t led;
   picfw_eeprom_t eeprom;
   picfw_w5500_t w5500;
-  picfw_bool_t wifi_variant;  /* cached from strap decode at init */
-  picfw_bool_t wifi_ready;    /* Wemos readiness: RB0 driven HIGH */
+  picfw_ethernet_t ethernet;
+  picfw_bool_t wifi_variant;     /* cached from strap decode at init */
+  picfw_bool_t ethernet_variant; /* cached from strap decode at init */
+  picfw_bool_t wifi_ready;       /* Wemos readiness: RB0 driven HIGH */
   picfw_bool_t bootloader_entry; /* J11 PGC+PGD both LOW at POR */
 } picfw_pic16f15356_hal_t;
 
