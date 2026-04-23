@@ -5,10 +5,15 @@
 
 /*
  * Recovered from the legacy combined.hex image plus Microchip PIC16F15356
- * register documentation. These values model the observed application runtime
- * clock/timer/UART layout; they are not yet hardware-measured on a live
- * adapter. The EUSART values below describe the application image, not the
- * separate bootloader transfer modes used by ebuspicloader.
+ * register documentation, then projected into the current host-buildable
+ * firmware model. These values are useful for deterministic validation, but
+ * they are not yet a complete silicon-validated bring-up recipe.
+ *
+ * Important split:
+ * - EUSART1 below is the current bus-side UART model in this tree.
+ * - EUSART2 below is the current host-side UART model in this tree.
+ * - Bootloader transfer rates used by ebuspicloader are separate and must not
+ *   be inferred from these runtime register constants.
  */
 
 #define PICFW_PIC16F15356_RESET_FOSC_HZ 1000000u
@@ -24,20 +29,19 @@
 #define PICFW_PIC16F15356_TMR0_COUNTS_PER_ISR ((uint16_t)(PICFW_PIC16F15356_TMR0_PERIOD_REG + 1u))
 #define PICFW_PIC16F15356_TMR0_ISR_DIVIDER 200u
 
-#define PICFW_PIC16F15356_APP_EUSART_BAUD1CON_INIT 0x08u
-#define PICFW_PIC16F15356_APP_EUSART_RC1STA_INIT 0x90u
-#define PICFW_PIC16F15356_APP_EUSART_TX1STA_INIT 0x24u
-#define PICFW_PIC16F15356_APP_EUSART_DEFAULT_SPBRG 0x0340u
-#define PICFW_PIC16F15356_APP_EUSART_HIGH_SPEED_SPBRG 0x0044u
-#define PICFW_PIC16F15356_APP_EUSART_DEFAULT_BAUD_NOMINAL 9600u
-#define PICFW_PIC16F15356_APP_EUSART_HIGH_SPEED_BAUD_NOMINAL 115200u
-#define PICFW_PIC16F15356_APP_EUSART_VERY_HIGH_SPEED_SPBRG 0x0008u
-#define PICFW_PIC16F15356_APP_EUSART_VERY_HIGH_SPEED_BAUD_NOMINAL 921600u
+#define PICFW_PIC16F15356_BUS_EUSART1_BAUD1CON_INIT 0x08u
+#define PICFW_PIC16F15356_BUS_EUSART1_RC1STA_INIT 0x90u
+#define PICFW_PIC16F15356_BUS_EUSART1_TX1STA_INIT 0x24u
+#define PICFW_PIC16F15356_BUS_EUSART1_SPBRG 0x0D04u
+#define PICFW_PIC16F15356_BUS_EUSART1_BAUD_NOMINAL 2400u
 
-/* EUSART2 registers — host UART (same control bits as EUSART1) */
-#define PICFW_PIC16F15356_APP_EUSART2_BAUD2CON_INIT 0x08u
-#define PICFW_PIC16F15356_APP_EUSART2_RC2STA_INIT 0x90u
-#define PICFW_PIC16F15356_APP_EUSART2_TX2STA_INIT 0x24u
+#define PICFW_PIC16F15356_HOST_EUSART2_BAUD2CON_INIT 0x08u
+#define PICFW_PIC16F15356_HOST_EUSART2_RC2STA_INIT 0x90u
+#define PICFW_PIC16F15356_HOST_EUSART2_TX2STA_INIT 0x24u
+#define PICFW_PIC16F15356_HOST_EUSART2_DEFAULT_SPBRG 0x0340u
+#define PICFW_PIC16F15356_HOST_EUSART2_HIGH_SPEED_SPBRG 0x0044u
+#define PICFW_PIC16F15356_HOST_EUSART2_DEFAULT_BAUD_NOMINAL 9600u
+#define PICFW_PIC16F15356_HOST_EUSART2_HIGH_SPEED_BAUD_NOMINAL 115200u
 
 /* --- GPIO pin definitions (from eBUS Adapter v3 schematic, IC5) --- */
 
@@ -145,7 +149,7 @@ static inline uint32_t picfw_pic16f15356_scheduler_period_ms(void) {
   return picfw_pic16f15356_scheduler_period_us() / 1000u;
 }
 
-static inline uint32_t picfw_pic16f15356_app_eusart_async_baud(uint16_t spbrg) {
+static inline uint32_t picfw_pic16f15356_eusart_async_baud(uint16_t spbrg) {
   uint32_t denominator = 4u * ((uint32_t)spbrg + 1u);
   return (PICFW_PIC16F15356_RUN_FOSC_HZ + (denominator / 2u)) / denominator;
 }

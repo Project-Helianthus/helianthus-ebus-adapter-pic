@@ -2,18 +2,25 @@ BUILD_DIR ?= build
 BUILD_STAMP := $(BUILD_DIR)/.dir
 CC ?= cc
 CFLAGS ?= -std=c11 -Wall -Wextra -Werror -pedantic
+CFLAGS_HOST := $(CFLAGS) -DPICFW_HAL_ACTIVE_PROFILE=PICFW_HAL_PROFILE_SIM
+CFLAGS_XC8_PROFILE := $(CFLAGS) -DPICFW_HAL_ACTIVE_PROFILE=PICFW_HAL_PROFILE_XC8
 RUNTIME_INCLUDES := -Iruntime/include
 BOOTLOADER_INCLUDES := -Ibootloader/include
-RUNTIME_SRC := $(sort $(wildcard runtime/src/*.c))
+RUNTIME_COMMON_SRC := $(sort $(filter-out runtime/src/pic16f15356_hal_sim.c runtime/src/pic16f15356_hal_xc8.c,$(wildcard runtime/src/*.c)))
+RUNTIME_SIM_SRC := runtime/src/pic16f15356_hal_sim.c
+RUNTIME_XC8_SRC := runtime/src/pic16f15356_hal_xc8.c
+RUNTIME_SRC := $(RUNTIME_COMMON_SRC) $(RUNTIME_SIM_SRC)
 PICBOOT_SRC := bootloader/src/picboot.c
 PICBOOT_ORACLE_SRC := tools/picboot_oracle_check.c
 PICFW_ORACLE_SRC := tools/picfw_oracle_check.c
 TEST_ADAPTER_PROTOCOL_SRC := tests/test_adapter_protocol.c
 TEST_RUNTIME_SRC := tests/test_runtime.c
+XC8_COMPILE_PROBE_SRC := tools/check_hal_xc8_compile.c
 PICBOOT_ORACLE_BIN := $(BUILD_DIR)/picboot_oracle_check
 PICFW_ORACLE_BIN := $(BUILD_DIR)/picfw_oracle_check
 TEST_ADAPTER_PROTOCOL_BIN := $(BUILD_DIR)/test_adapter_protocol
 TEST_RUNTIME_BIN := $(BUILD_DIR)/test_runtime
+XC8_COMPILE_PROBE_BIN := $(BUILD_DIR)/check_hal_xc8_compile
 PICBOOT_JSON := $(BUILD_DIR)/picboot_oracle_check.json
 
 # --- Determinism Checks ---
@@ -25,7 +32,7 @@ PYTHON := python3
 MAX_COMPLEXITY := 10
 MAX_ISR_CYCLES := 60
 
-.PHONY: build test oracle-check clean \
+.PHONY: build test oracle-check clean check-xc8-compile \
         check-all check-recursion check-malloc check-loops check-float check-complexity \
         check-stack-depth check-buffers check-guards \
         check-ram-budget check-wcet-isr check-const-dispatch \
@@ -153,21 +160,28 @@ $(BUILD_STAMP):
 
 $(PICBOOT_ORACLE_BIN): | $(BUILD_STAMP)
 $(PICBOOT_ORACLE_BIN): $(PICBOOT_SRC) $(PICBOOT_ORACLE_SRC)
-	$(CC) $(CFLAGS) $(BOOTLOADER_INCLUDES) $(PICBOOT_SRC) $(PICBOOT_ORACLE_SRC) -o "$@"
+	$(CC) $(CFLAGS_HOST) $(BOOTLOADER_INCLUDES) $(PICBOOT_SRC) $(PICBOOT_ORACLE_SRC) -o "$@"
 
 $(PICFW_ORACLE_BIN): | $(BUILD_STAMP)
 $(PICFW_ORACLE_BIN): $(RUNTIME_SRC) $(PICFW_ORACLE_SRC)
-	$(CC) $(CFLAGS) $(RUNTIME_INCLUDES) $(RUNTIME_SRC) $(PICFW_ORACLE_SRC) -o "$@"
+	$(CC) $(CFLAGS_HOST) $(RUNTIME_INCLUDES) $(RUNTIME_SRC) $(PICFW_ORACLE_SRC) -o "$@"
 
 $(TEST_ADAPTER_PROTOCOL_BIN): | $(BUILD_STAMP)
 $(TEST_ADAPTER_PROTOCOL_BIN): $(RUNTIME_SRC) $(TEST_ADAPTER_PROTOCOL_SRC)
-	$(CC) $(CFLAGS) $(RUNTIME_INCLUDES) $(RUNTIME_SRC) $(TEST_ADAPTER_PROTOCOL_SRC) -o "$@"
+	$(CC) $(CFLAGS_HOST) $(RUNTIME_INCLUDES) $(RUNTIME_SRC) $(TEST_ADAPTER_PROTOCOL_SRC) -o "$@"
 
 $(TEST_RUNTIME_BIN): | $(BUILD_STAMP)
 $(TEST_RUNTIME_BIN): $(RUNTIME_SRC) $(TEST_RUNTIME_SRC)
-	$(CC) $(CFLAGS) $(RUNTIME_INCLUDES) $(RUNTIME_SRC) $(TEST_RUNTIME_SRC) -o "$@"
+	$(CC) $(CFLAGS_HOST) $(RUNTIME_INCLUDES) $(RUNTIME_SRC) $(TEST_RUNTIME_SRC) -o "$@"
 
-test: build
+$(XC8_COMPILE_PROBE_BIN): | $(BUILD_STAMP)
+$(XC8_COMPILE_PROBE_BIN): $(RUNTIME_COMMON_SRC) $(RUNTIME_XC8_SRC) $(XC8_COMPILE_PROBE_SRC)
+	$(CC) $(CFLAGS_XC8_PROFILE) $(RUNTIME_INCLUDES) $(RUNTIME_COMMON_SRC) $(RUNTIME_XC8_SRC) $(XC8_COMPILE_PROBE_SRC) -o "$@"
+
+check-xc8-compile: $(XC8_COMPILE_PROBE_BIN)
+	@"./$(XC8_COMPILE_PROBE_BIN)"
+
+test: check-all check-xc8-compile build
 	"./$(TEST_ADAPTER_PROTOCOL_BIN)"
 	"./$(TEST_RUNTIME_BIN)"
 	"./$(PICFW_ORACLE_BIN)"

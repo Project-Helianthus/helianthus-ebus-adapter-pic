@@ -126,6 +126,32 @@ typedef struct picboot_parser {
     uint32_t sync_loss_bytes;  /* bytes discarded while waiting for STX */
 } picboot_parser_t;
 
+typedef struct picboot_target_backend_ops {
+    bool (*read_flash)(void *ctx, uint16_t address_words, uint8_t *out, uint16_t length);
+    bool (*write_flash)(void *ctx, uint16_t address_words, const uint8_t *data, uint16_t length);
+    bool (*erase_flash)(void *ctx, uint16_t address_words, uint16_t blocks);
+    bool (*read_ee_data)(void *ctx, uint16_t address, uint8_t *out, uint16_t length);
+    bool (*write_ee_data)(void *ctx, uint16_t address, const uint8_t *data, uint16_t length);
+    bool (*read_config)(void *ctx, uint16_t address, uint8_t *out, uint16_t length);
+    bool (*write_config)(void *ctx, uint16_t address, const uint8_t *data, uint16_t length);
+    bool (*reset_device)(void *ctx, uint16_t application_entry);
+} picboot_target_backend_ops_t;
+
+/* NOTE: picboot_target_t is the target-facing profile.
+ * It carries parser/metadata/session state plus backend callbacks, but no
+ * flash/EEPROM/config RAM mirrors.  XC8 builds should instantiate this
+ * profile and back it with real NVM register access. */
+typedef struct picboot_target {
+    picboot_metadata_t metadata;
+    picboot_parser_t parser;
+    const picboot_target_backend_ops_t *backend_ops;
+    void *backend_ctx;
+    bool application_running;
+    uint16_t application_entry;
+    uint32_t reset_counter;
+    bool led_active;
+} picboot_target_t;
+
 /* NOTE: picboot_bootloader_t (~33KB) is a host-side memory model.
  * It contains full flash/EEPROM/config arrays for simulation.
  * On real PIC hardware, these are accessed via NVM registers, not RAM copies.
@@ -146,6 +172,8 @@ void picboot_frame_clear(picboot_frame_t *frame);
 void picboot_metadata_init(picboot_metadata_t *metadata);
 void picboot_bootloader_init(picboot_bootloader_t *bootloader);
 void picboot_bootloader_init_with_metadata(picboot_bootloader_t *bootloader, const picboot_metadata_t *metadata);
+void picboot_target_init(picboot_target_t *target, const picboot_target_backend_ops_t *backend_ops, void *backend_ctx);
+void picboot_target_init_with_metadata(picboot_target_t *target, const picboot_metadata_t *metadata, const picboot_target_backend_ops_t *backend_ops, void *backend_ctx);
 
 size_t picboot_frame_serialize(const picboot_frame_t *frame, uint8_t *out, size_t out_capacity);
 size_t picboot_frame_serialize_with_stx(const picboot_frame_t *frame, uint8_t *out, size_t out_capacity);
@@ -157,11 +185,14 @@ bool picboot_deadline_reached_u16(uint16_t now, uint16_t deadline);
 size_t picboot_expected_request_payload_len(uint8_t command, uint16_t request_data_length);
 picboot_feed_result_t picboot_bootloader_feed(picboot_bootloader_t *bootloader, uint8_t byte, picboot_frame_t *response);
 bool picboot_bootloader_process_request(picboot_bootloader_t *bootloader, const picboot_frame_t *request, picboot_frame_t *response);
+picboot_feed_result_t picboot_target_feed(picboot_target_t *target, uint8_t byte, picboot_frame_t *response);
+bool picboot_target_process_request(picboot_target_t *target, const picboot_frame_t *request, picboot_frame_t *response);
 
 picboot_frame_t picboot_make_request(uint8_t command, uint16_t address, uint16_t data_length, const uint8_t *payload, size_t payload_len);
 picboot_frame_t picboot_make_response(uint8_t command, uint16_t address, const uint8_t *payload, size_t payload_len);
 
 void picboot_build_version_payload(const picboot_bootloader_t *bootloader, picboot_version_payload_t *payload);
+void picboot_build_version_payload_from_metadata(const picboot_metadata_t *metadata, picboot_version_payload_t *payload);
 void picboot_build_config_window(const picboot_bootloader_t *bootloader, uint16_t address, uint16_t length, uint8_t *out);
 uint16_t picboot_checksum_words_le(const uint8_t *data, size_t len);
 uint16_t picboot_crc16_ccitt(const uint8_t *data, size_t len);

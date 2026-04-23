@@ -1,5 +1,6 @@
 #include "picfw/pic16f15356_app.h"
 #include "picfw/pic16f15356_hal.h"
+#include "picfw/loader_config.h"
 #include "picfw/runtime.h"
 #include "picfw/eeprom_layout.h"
 #include "picfw/ethernet.h"
@@ -67,6 +68,32 @@ static size_t collect_frames(uint8_t *bytes, size_t byte_len,
   }
 
   return frame_count;
+}
+
+static size_t pump_hal_host_tx(picfw_pic16f15356_hal_t *hal, uint8_t *out,
+                               size_t out_cap) {
+  size_t guard = 0u;
+
+  if (hal == 0) {
+    return 0u;
+  }
+
+  while (hal->latches.host_tx_stage.count > 0u &&
+         guard < PICFW_RUNTIME_HOST_TX_CAP) {
+    picfw_pic16f15356_isr_latch_host_tx_ready(hal);
+    guard++;
+  }
+
+  return picfw_pic16f15356_hal_drain_host_tx(hal, out, out_cap);
+}
+
+static size_t pump_app_host_tx(picfw_pic16f15356_app_t *app, uint8_t *out,
+                               size_t out_cap) {
+  if (app == 0) {
+    return 0u;
+  }
+
+  return pump_hal_host_tx(&app->hal, out, out_cap);
 }
 
 static int test_runtime_init_and_info(void) {
@@ -159,8 +186,9 @@ static int test_runtime_init_and_info(void) {
 
 static int test_pic16f15356_platform_model(void) {
   const char *name = "pic16f15356_platform_model";
-  uint32_t default_baud;
-  uint32_t high_speed_baud;
+  uint32_t bus_baud;
+  uint32_t host_default_baud;
+  uint32_t host_high_speed_baud;
 
   if (expect_true(name, PICFW_PIC16F15356_RESET_FOSC_HZ == 1000000u,
                   "reset fosc")) {
@@ -187,32 +215,47 @@ static int test_pic16f15356_platform_model(void) {
     return 1;
   }
 
-  default_baud = picfw_pic16f15356_app_eusart_async_baud(
-      PICFW_PIC16F15356_APP_EUSART_DEFAULT_SPBRG);
-  if (expect_true(name, default_baud == 9604u, "default uart actual baud")) {
+  bus_baud = picfw_pic16f15356_eusart_async_baud(
+      PICFW_PIC16F15356_BUS_EUSART1_SPBRG);
+  if (expect_true(name, bus_baud == 2400u, "bus uart actual baud")) {
     return 1;
   }
   if (expect_true(name,
                   picfw_within_percent(
-                      default_baud,
-                      PICFW_PIC16F15356_APP_EUSART_DEFAULT_BAUD_NOMINAL,
+                      bus_baud,
+                      PICFW_PIC16F15356_BUS_EUSART1_BAUD_NOMINAL,
                       1u) != PICFW_FALSE,
-                  "default uart nominal tolerance")) {
+                  "bus uart nominal tolerance")) {
     return 1;
   }
 
-  high_speed_baud = picfw_pic16f15356_app_eusart_async_baud(
-      PICFW_PIC16F15356_APP_EUSART_HIGH_SPEED_SPBRG);
-  if (expect_true(name, high_speed_baud == 115942u,
-                  "high-speed uart actual baud")) {
+  host_default_baud = picfw_pic16f15356_eusart_async_baud(
+      PICFW_PIC16F15356_HOST_EUSART2_DEFAULT_SPBRG);
+  if (expect_true(name, host_default_baud == 9604u,
+                  "default host uart actual baud")) {
     return 1;
   }
   if (expect_true(name,
                   picfw_within_percent(
-                      high_speed_baud,
-                      PICFW_PIC16F15356_APP_EUSART_HIGH_SPEED_BAUD_NOMINAL,
+                      host_default_baud,
+                      PICFW_PIC16F15356_HOST_EUSART2_DEFAULT_BAUD_NOMINAL,
                       1u) != PICFW_FALSE,
-                  "high-speed uart nominal tolerance")) {
+                  "default host uart nominal tolerance")) {
+    return 1;
+  }
+
+  host_high_speed_baud = picfw_pic16f15356_eusart_async_baud(
+      PICFW_PIC16F15356_HOST_EUSART2_HIGH_SPEED_SPBRG);
+  if (expect_true(name, host_high_speed_baud == 115942u,
+                  "high-speed host uart actual baud")) {
+    return 1;
+  }
+  if (expect_true(name,
+                  picfw_within_percent(
+                      host_high_speed_baud,
+                      PICFW_PIC16F15356_HOST_EUSART2_HIGH_SPEED_BAUD_NOMINAL,
+                      1u) != PICFW_FALSE,
+                  "high-speed host uart nominal tolerance")) {
     return 1;
   }
 
@@ -235,8 +278,12 @@ static int test_pic16f15356_hal_scaffold(void) {
                   "reset clock")) {
     return 1;
   }
-  if (expect_true(name, picfw_pic16f15356_hal_current_spbrg(&hal) == 0u,
-                  "reset spbrg")) {
+  if (expect_true(name, picfw_pic16f15356_hal_current_host_spbrg(&hal) == 0u,
+                  "reset host spbrg")) {
+    return 1;
+  }
+  if (expect_true(name, picfw_pic16f15356_hal_current_bus_spbrg(&hal) == 0u,
+                  "reset bus spbrg")) {
     return 1;
   }
 
@@ -264,24 +311,36 @@ static int test_pic16f15356_hal_scaffold(void) {
     return 1;
   }
   if (expect_true(name,
-                  picfw_pic16f15356_hal_current_spbrg(&hal) ==
-                      PICFW_PIC16F15356_APP_EUSART_DEFAULT_SPBRG,
-                  "default runtime spbrg")) {
+                  picfw_pic16f15356_hal_current_bus_spbrg(&hal) ==
+                      PICFW_PIC16F15356_BUS_EUSART1_SPBRG,
+                  "default runtime bus spbrg")) {
+    return 1;
+  }
+  if (expect_true(name,
+                  picfw_pic16f15356_hal_current_host_spbrg(&hal) ==
+                      PICFW_PIC16F15356_HOST_EUSART2_DEFAULT_SPBRG,
+                  "default runtime host spbrg")) {
     return 1;
   }
 
   picfw_pic16f15356_hal_set_uart_mode(&hal,
                                       PICFW_PIC16F15356_UART_MODE_HIGH_SPEED);
   if (expect_true(name,
-                  picfw_pic16f15356_hal_current_spbrg(&hal) ==
-                      PICFW_PIC16F15356_APP_EUSART_HIGH_SPEED_SPBRG,
-                  "high-speed runtime spbrg")) {
+                  picfw_pic16f15356_hal_current_bus_spbrg(&hal) ==
+                      PICFW_PIC16F15356_BUS_EUSART1_SPBRG,
+                  "high-speed runtime keeps bus spbrg")) {
     return 1;
   }
   if (expect_true(name,
-                  picfw_pic16f15356_app_eusart_async_baud(
-                      picfw_pic16f15356_hal_current_spbrg(&hal)) == 115942u,
-                  "high-speed runtime baud")) {
+                  picfw_pic16f15356_hal_current_host_spbrg(&hal) ==
+                      PICFW_PIC16F15356_HOST_EUSART2_HIGH_SPEED_SPBRG,
+                  "high-speed runtime host spbrg")) {
+    return 1;
+  }
+  if (expect_true(name,
+                  picfw_pic16f15356_eusart_async_baud(
+                      picfw_pic16f15356_hal_current_host_spbrg(&hal)) == 115942u,
+                  "high-speed runtime host baud")) {
     return 1;
   }
   picfw_pic16f15356_hal_set_uart_mode(&hal,
@@ -325,7 +384,7 @@ static int test_pic16f15356_hal_scaffold(void) {
   }
 
   frame_count = collect_frames(
-      tx, picfw_pic16f15356_hal_drain_host_tx(&hal, tx, sizeof(tx)), frames,
+      tx, pump_hal_host_tx(&hal, tx, sizeof(tx)), frames,
       sizeof(frames) / sizeof(frames[0]));
   if (expect_true(name, frame_count == 1u, "hal tx frame count")) {
     return 1;
@@ -372,6 +431,62 @@ static int test_pic16f15356_hal_scaffold(void) {
   return 0;
 }
 
+static int test_loader_config_decode_and_cache(void) {
+  const char *name = "loader_config_decode_and_cache";
+  picfw_loader_storage_t storage;
+  picfw_loader_config_t config;
+  picfw_loader_effective_mode_t mode;
+  picfw_ip_config_t ip_config;
+  uint8_t cfg[8] = {192u, 24u, 168u, 5u, 10u, 0x21u, 20u, 0x3Fu};
+  int errors = 0;
+
+  picfw_loader_storage_init_default(&storage);
+  picfw_loader_storage_write_block(&storage, 0u, cfg, sizeof(cfg));
+  errors += expect_true(name,
+                        picfw_loader_config_decode(&storage, &config) !=
+                            PICFW_FALSE,
+                        "decode config");
+  errors += expect_true(name, config.dhcp_enabled == PICFW_FALSE,
+                        "static IP config");
+  errors += expect_true(name, config.mask_len == 24u, "mask len");
+  errors += expect_true(name, config.arbitration_delay_us == 50u,
+                        "arbitration delay");
+  errors += expect_true(name, config.visual_ping != PICFW_FALSE,
+                        "visual ping enabled");
+  errors += expect_true(name, config.allow_hardware_jumpers == PICFW_FALSE,
+                        "ignore jumpers");
+  errors += expect_true(name, config.variant_mode == PICFW_LOADER_VARIANT_ETHERNET,
+                        "forced ethernet variant");
+  errors += expect_true(name, config.static_ip[0] == 192u &&
+                                  config.static_ip[3] == 20u,
+                        "static ip bytes");
+  errors += expect_true(name, config.mac[3] == 168u && config.mac[4] == 10u &&
+                                  config.mac[5] == 20u,
+                        "MAC derived from user-id bytes");
+
+  picfw_loader_config_resolve_mode(&config, PICFW_VARIANT_WIFI, PICFW_TRUE,
+                                   PICFW_TRUE, &mode);
+  errors += expect_true(name, mode.variant == PICFW_VARIANT_ETHERNET,
+                        "forced variant overrides straps");
+  errors += expect_true(name, mode.high_speed == PICFW_FALSE,
+                        "forced ethernet keeps default speed");
+
+  picfw_loader_config_to_ip_config(&config, &ip_config);
+  errors += expect_true(name, ip_config.valid != PICFW_FALSE, "ip cache valid");
+  errors += expect_true(name, ip_config.dhcp_enabled == PICFW_FALSE,
+                        "ip cache static");
+  errors += expect_true(name, ip_config.ip[0] == 192u && ip_config.ip[3] == 20u,
+                        "ip cache address");
+  errors += expect_true(name, ip_config.mask[0] == 255u &&
+                                  ip_config.mask[3] == 0u,
+                        "ip cache mask");
+  errors += expect_true(name, ip_config.gateway[0] == 192u &&
+                                  ip_config.gateway[3] == 1u,
+                        "ip cache gateway");
+
+  return errors;
+}
+
 static int test_pic16f15356_app_shell(void) {
   const char *name = "pic16f15356_app_shell";
   picfw_pic16f15356_app_t app;
@@ -413,7 +528,7 @@ static int test_pic16f15356_app_shell(void) {
   }
 
   frame_count = collect_frames(
-      tx, picfw_pic16f15356_app_drain_host_tx(&app, tx, sizeof(tx)), frames,
+      tx, pump_app_host_tx(&app, tx, sizeof(tx)), frames,
       sizeof(frames) / sizeof(frames[0]));
   if (expect_true(name, frame_count == 1u, "app init frame count")) {
     return 1;
@@ -438,6 +553,41 @@ static int test_pic16f15356_app_shell(void) {
   }
 
   return 0;
+}
+
+static int test_app_loader_config_normalization(void) {
+  const char *name = "app_loader_config_normalization";
+  picfw_pic16f15356_app_t app;
+  uint8_t cfg[8] = {10u, 24u, 0u, 0x07u, 0u, 0x01u, 50u, 0x3Fu};
+  int errors = 0;
+
+  memset(&app, 0, sizeof(app));
+  picfw_pic16f15356_nvm_init(&app.nvm);
+  picfw_loader_storage_write_block(&app.nvm.loader_storage, 0u, cfg, sizeof(cfg));
+
+  picfw_pic16f15356_app_init(&app, 0);
+
+  errors += expect_true(name, app.hal.ethernet_variant == PICFW_TRUE,
+                        "loader-forced ethernet variant");
+  errors += expect_true(name,
+                        picfw_pic16f15356_hal_current_host_spbrg(&app.hal) ==
+                            PICFW_PIC16F15356_HOST_EUSART2_DEFAULT_SPBRG,
+                        "forced ethernet host speed default");
+  errors += expect_true(name, app.runtime.config.arbitration_delay_us == 70u,
+                        "runtime arbitration from loader");
+  errors += expect_true(name,
+                        app.runtime.config.info_payload[PICFW_ADAPTER_INFO_VERSION][4] ==
+                            (uint8_t)(0x10u | 0x04u),
+                        "version jumpers reflect ethernet");
+  errors += expect_true(name,
+                        app.hal.eeprom.data[PICFW_EEPROM_CFG_VER_OFFSET] ==
+                            PICFW_EEPROM_CFG_VERSION,
+                        "derived EEPROM cache stamped");
+  errors += expect_true(name, app.hal.ethernet.mac[3] == 0u &&
+                                  app.hal.ethernet.mac[5] == 50u,
+                        "ethernet MAC derived from loader");
+
+  return errors;
 }
 
 static int test_runtime_start_send_and_boundary_release(void) {
@@ -2712,7 +2862,7 @@ static int test_signal_detect_gates_status_emission(void) {
   }
   picfw_pic16f15356_app_mainline_service(&app);
   /* Drain RESETTED response */
-  picfw_pic16f15356_app_drain_host_tx(&app, tx, sizeof(tx));
+  pump_app_host_tx(&app, tx, sizeof(tx));
 
   /* Advance time past the status deadline (2 scheduler ticks = 200ms) */
   for (tick = 0u; tick <= PICFW_PIC16F15356_TMR0_ISR_DIVIDER; ++tick) {
@@ -2723,25 +2873,25 @@ static int test_signal_detect_gates_status_emission(void) {
   }
 
   /* Test 1: Bus busy (RB1 HIGH) — status emission should be deferred */
-  app.hal.latches.portb_input = 0x02u; /* RB1=1 = bus busy */
+  app.hal.profile.portb_input = 0x02u; /* RB1=1 = bus busy */
   picfw_pic16f15356_app_mainline_service(&app);
-  tx_len = picfw_pic16f15356_app_drain_host_tx(&app, tx, sizeof(tx));
+  tx_len = pump_app_host_tx(&app, tx, sizeof(tx));
   errors += expect_true(name, tx_len == 0u,
                         "no status frame when bus busy");
 
   /* Test 2: Bus idle (RB1 LOW) — status emission should proceed */
-  app.hal.latches.portb_input = 0x00u; /* RB1=0 = bus idle */
+  app.hal.profile.portb_input = 0x00u; /* RB1=0 = bus idle */
   picfw_pic16f15356_app_mainline_service(&app);
-  tx_len = picfw_pic16f15356_app_drain_host_tx(&app, tx, sizeof(tx));
+  tx_len = pump_app_host_tx(&app, tx, sizeof(tx));
   errors += expect_true(name, tx_len > 0u,
                         "status frame emitted when bus idle");
 
   /* Test 3: bus_busy field is correctly set from signal detect */
-  app.hal.latches.portb_input = 0x02u;
+  app.hal.profile.portb_input = 0x02u;
   picfw_pic16f15356_app_mainline_service(&app);
   errors += expect_true(name, app.runtime.bus_busy == PICFW_TRUE,
                         "bus_busy set when RB1 high");
-  app.hal.latches.portb_input = 0x00u;
+  app.hal.profile.portb_input = 0x00u;
   picfw_pic16f15356_app_mainline_service(&app);
   errors += expect_true(name, app.runtime.bus_busy == PICFW_FALSE,
                         "bus_busy cleared when RB1 low");
@@ -3060,39 +3210,40 @@ static int test_eeprom(void) {
   return errors;
 }
 
-static int test_921600_baud_mode(void) {
-  const char *name = "921600_baud_mode";
+static int test_uart_role_split(void) {
+  const char *name = "uart_role_split";
   picfw_pic16f15356_hal_t hal;
-  uint16_t spbrg;
-  uint32_t actual_baud;
+  uint16_t host_spbrg;
+  uint16_t bus_spbrg;
   int errors = 0;
 
   picfw_pic16f15356_hal_runtime_init(&hal);
 
-  /* Set very-high-speed mode */
-  picfw_pic16f15356_hal_set_uart_mode(&hal,
-      PICFW_PIC16F15356_UART_MODE_VERY_HIGH_SPEED);
-  spbrg = picfw_pic16f15356_hal_current_spbrg(&hal);
-  errors += expect_true(name, spbrg == 0x0008u,
-                        "SPBRG = 0x0008 for 921600 baud");
-
-  /* Verify actual baud within 4% of nominal */
-  actual_baud = picfw_pic16f15356_app_eusart_async_baud(spbrg);
-  errors += expect_true(name, actual_baud > 880000u && actual_baud < 960000u,
-                        "actual baud within 4% of 921600");
-
-  /* EUSART2 mirrors EUSART1 */
+  bus_spbrg = picfw_pic16f15356_hal_current_bus_spbrg(&hal);
+  host_spbrg = picfw_pic16f15356_hal_current_host_spbrg(&hal);
+  errors += expect_true(name, bus_spbrg == PICFW_PIC16F15356_BUS_EUSART1_SPBRG,
+                        "default bus spbrg");
   errors += expect_true(name,
-      hal.regs.sp2brgl == hal.regs.sp1brgl &&
-      hal.regs.sp2brgh == hal.regs.sp1brgh,
-      "EUSART2 mirrors EUSART1 baud");
+                        host_spbrg == PICFW_PIC16F15356_HOST_EUSART2_DEFAULT_SPBRG,
+                        "default host spbrg");
+
+  picfw_pic16f15356_hal_set_uart_mode(&hal,
+      PICFW_PIC16F15356_UART_MODE_HIGH_SPEED);
+  bus_spbrg = picfw_pic16f15356_hal_current_bus_spbrg(&hal);
+  host_spbrg = picfw_pic16f15356_hal_current_host_spbrg(&hal);
+  errors += expect_true(name, bus_spbrg == PICFW_PIC16F15356_BUS_EUSART1_SPBRG,
+                        "high-speed keeps bus at fixed divisor");
+  errors += expect_true(
+      name, host_spbrg == PICFW_PIC16F15356_HOST_EUSART2_HIGH_SPEED_SPBRG,
+      "high-speed updates host divisor");
 
   /* Switch back to default */
   picfw_pic16f15356_hal_set_uart_mode(&hal,
       PICFW_PIC16F15356_UART_MODE_DEFAULT);
-  spbrg = picfw_pic16f15356_hal_current_spbrg(&hal);
-  errors += expect_true(name, spbrg == 0x0340u,
-                        "SPBRG back to 0x0340 after mode switch");
+  host_spbrg = picfw_pic16f15356_hal_current_host_spbrg(&hal);
+  errors += expect_true(name,
+                        host_spbrg == PICFW_PIC16F15356_HOST_EUSART2_DEFAULT_SPBRG,
+                        "host divisor back to default after mode switch");
 
   return errors;
 }
@@ -3108,7 +3259,7 @@ static int test_j11_bootloader_entry(void) {
                         "default init: no bootloader entry");
 
   /* Verify pin reading logic directly: both LOW = bootloader */
-  hal.latches.portb_input = 0x02u; /* RB1=1, RB6=0, RB7=0 */
+  hal.profile.portb_input = 0x02u; /* RB1=1, RB6=0, RB7=0 */
   errors += expect_true(name,
       picfw_pic16f15356_hal_read_pin(&hal, PICFW_PIN_J11_PGC_PORT,
                                       PICFW_PIN_J11_PGC_BIT) == PICFW_FALSE,
@@ -3119,14 +3270,14 @@ static int test_j11_bootloader_entry(void) {
       "RB7 reads LOW when portb bit 7 clear");
 
   /* Both HIGH = normal */
-  hal.latches.portb_input = 0xC2u; /* RB1=1, RB6=1, RB7=1 */
+  hal.profile.portb_input = 0xC2u; /* RB1=1, RB6=1, RB7=1 */
   errors += expect_true(name,
       picfw_pic16f15356_hal_read_pin(&hal, PICFW_PIN_J11_PGC_PORT,
                                       PICFW_PIN_J11_PGC_BIT) == PICFW_TRUE,
       "RB6 reads HIGH when portb bit 6 set");
 
   /* Only PGC low — not bootloader (need BOTH) */
-  hal.latches.portb_input = 0x82u; /* RB6=0, RB7=1 */
+  hal.profile.portb_input = 0x82u; /* RB6=0, RB7=1 */
   {
     picfw_bool_t pgc = picfw_pic16f15356_hal_read_pin(
         &hal, PICFW_PIN_J11_PGC_PORT, PICFW_PIN_J11_PGC_BIT);
@@ -3137,7 +3288,7 @@ static int test_j11_bootloader_entry(void) {
   }
 
   /* Only PGD low — not bootloader */
-  hal.latches.portb_input = 0x42u; /* RB6=1, RB7=0 */
+  hal.profile.portb_input = 0x42u; /* RB6=1, RB7=0 */
   {
     picfw_bool_t pgc = picfw_pic16f15356_hal_read_pin(
         &hal, PICFW_PIN_J11_PGC_PORT, PICFW_PIN_J11_PGC_BIT);
@@ -3184,12 +3335,16 @@ static int test_wifi_check_startup_gate(void) {
     picfw_pic16f15356_app_isr_tmr0(&app);
   }
   picfw_pic16f15356_app_mainline_service(&app);
-  tx_len = picfw_pic16f15356_app_drain_host_tx(&app, tx, sizeof(tx));
+  tx_len = pump_app_host_tx(&app, tx, sizeof(tx));
   errors += expect_true(name, tx_len == 0u,
                         "no TX output while WiFi gate active");
+  errors += expect_true(name, app.hal.latches.host_rx_fifo.count == 0u,
+                        "host RX latch drained while gate active");
+  errors += expect_true(name, app.runtime.event_queue.count > 0u,
+                        "runtime queue buffers bytes while gate active");
 
   /* Wemos becomes ready: set RB0 HIGH */
-  app.hal.latches.portb_input |= 0x01u; /* RB0=1 */
+  app.hal.profile.portb_input |= 0x01u; /* RB0=1 */
   for (tick = 0u; tick <= PICFW_PIC16F15356_TMR0_ISR_DIVIDER; ++tick) {
     picfw_pic16f15356_app_isr_tmr0(&app);
   }
@@ -3201,7 +3356,7 @@ static int test_wifi_check_startup_gate(void) {
 
   /* Gap 3 fix: the INIT bytes queued during gate should now be processed.
    * The gate-lift mainline_service call delivered the queued bytes. */
-  tx_len = picfw_pic16f15356_app_drain_host_tx(&app, tx, sizeof(tx));
+  tx_len = pump_app_host_tx(&app, tx, sizeof(tx));
   errors += expect_true(name, tx_len > 0u,
                         "queued INIT processed on gate lift");
 
@@ -3212,7 +3367,7 @@ static int test_wifi_check_startup_gate(void) {
     picfw_pic16f15356_app_isr_tmr0(&app);
   }
   picfw_pic16f15356_app_mainline_service(&app);
-  tx_len = picfw_pic16f15356_app_drain_host_tx(&app, tx, sizeof(tx));
+  tx_len = pump_app_host_tx(&app, tx, sizeof(tx));
   errors += expect_true(name, tx_len > 0u,
                         "fresh INIT also processed after WiFi ready");
 
@@ -3229,7 +3384,7 @@ static int test_wifi_check_startup_gate(void) {
     picfw_pic16f15356_app_isr_tmr0(&app);
   }
   picfw_pic16f15356_app_mainline_service(&app);
-  tx_len = picfw_pic16f15356_app_drain_host_tx(&app, tx, sizeof(tx));
+  tx_len = pump_app_host_tx(&app, tx, sizeof(tx));
   errors += expect_true(name, tx_len > 0u,
                         "non-WiFi: INIT processed immediately");
 
@@ -3409,8 +3564,16 @@ static int test_gpio_and_pin_model(void) {
   errors += expect_true(name, hal.regs.baud2con == 0x08u, "BAUD2CON init");
   errors += expect_true(name, hal.regs.rc2sta == 0x90u, "RC2STA init");
   errors += expect_true(name, hal.regs.tx2sta == 0x24u, "TX2STA init");
-  errors += expect_true(name, hal.regs.sp2brgl == hal.regs.sp1brgl,
-                        "EUSART2 baud matches EUSART1");
+  errors += expect_true(
+      name,
+      picfw_pic16f15356_hal_current_bus_spbrg(&hal) ==
+          PICFW_PIC16F15356_BUS_EUSART1_SPBRG,
+      "EUSART1 keeps bus divisor");
+  errors += expect_true(
+      name,
+      picfw_pic16f15356_hal_current_host_spbrg(&hal) ==
+          PICFW_PIC16F15356_HOST_EUSART2_DEFAULT_SPBRG,
+      "EUSART2 uses host default divisor");
 
   /* GPIO read: default signal-detect (RB1=1, bus present) */
   errors += expect_true(name,
@@ -3418,7 +3581,7 @@ static int test_gpio_and_pin_model(void) {
                         "signal detect default high");
 
   /* GPIO read: simulate no signal (clear RB1) */
-  hal.latches.portb_input = 0x00u;
+  hal.profile.portb_input = 0x00u;
   errors += expect_true(name,
                         picfw_pic16f15356_hal_signal_detect(&hal) == PICFW_FALSE,
                         "signal detect low after clear");
@@ -3430,7 +3593,7 @@ static int test_gpio_and_pin_model(void) {
   errors += expect_true(name, (hal.regs.latb & 1u) == 0u, "write pin clears LAT bit");
 
   /* GPIO read: pin from PORTA */
-  hal.latches.porta_input = 0x10u; /* RA4 = 1 */
+  hal.profile.porta_input = 0x10u; /* RA4 = 1 */
   errors += expect_true(name,
                         picfw_pic16f15356_hal_read_pin(&hal, PICFW_PORT_A, 4u) == PICFW_TRUE,
                         "read RA4 high");
@@ -3447,7 +3610,7 @@ static int test_gpio_and_pin_model(void) {
                         "signal detect null guard");
 
   /* Strap read: default (all high = enhanced, normal speed, RPi/USB) */
-  hal.latches.porta_input = 0x33u; /* RA0=1, RA1=1, RA4=1, RA5=1 */
+  hal.profile.porta_input = 0x33u; /* RA0=1, RA1=1, RA4=1, RA5=1 */
   picfw_pic16f15356_hal_read_straps(&hal, &straps);
   errors += expect_true(name, straps.enhanced_protocol == PICFW_TRUE,
                         "strap: enhanced protocol (pin high)");
@@ -3457,7 +3620,7 @@ static int test_gpio_and_pin_model(void) {
                         "strap: RPi/USB variant");
 
   /* Strap read: high-speed + ethernet */
-  hal.latches.porta_input = 0x10u; /* RA4=1(enhanced), RA5=0(high-speed), RA0=0, RA1=0 */
+  hal.profile.porta_input = 0x10u; /* RA4=1(enhanced), RA5=0(high-speed), RA0=0, RA1=0 */
   picfw_pic16f15356_hal_read_straps(&hal, &straps);
   errors += expect_true(name, straps.high_speed == PICFW_TRUE,
                         "strap: high-speed (pin low)");
@@ -3469,7 +3632,7 @@ static int test_gpio_and_pin_model(void) {
                         "host_tx_ready initially false");
   picfw_pic16f15356_isr_latch_host_tx_ready(&hal);
   errors += expect_true(name, hal.latches.host_tx_ready == PICFW_TRUE,
-                        "host_tx_ready set by ISR");
+                        "host_tx_ready latched while stage empty");
   picfw_pic16f15356_isr_latch_bus_tx_ready(&hal);
   errors += expect_true(name, hal.latches.bus_tx_ready == PICFW_TRUE,
                         "bus_tx_ready set by ISR");
@@ -3479,36 +3642,57 @@ static int test_gpio_and_pin_model(void) {
   picfw_pic16f15356_isr_latch_bus_tx_ready(0);
   /* (no crash = pass) */
 
-  /* TX-ready consumption by mainline service */
+  /* TX-ready staging and one-byte-at-a-time consumption */
   {
     picfw_pic16f15356_app_t app;
     picfw_runtime_config_t cfg;
+    uint8_t tx[8];
+    size_t tx_len;
+    size_t staged_before;
+    picfw_startup_state_t startup_before;
     picfw_runtime_config_init_default(&cfg);
     picfw_pic16f15356_app_init(&app, &cfg);
-    picfw_pic16f15356_isr_latch_host_tx_ready(&app.hal);
-    picfw_pic16f15356_isr_latch_bus_tx_ready(&app.hal);
-    errors += expect_true(name, app.hal.latches.host_tx_ready == PICFW_TRUE,
-                          "host_tx_ready before service");
-    /* Trigger a mainline service cycle */
-    picfw_pic16f15356_isr_latch_tmr0(&app.hal);
-    app.hal.latches.scheduler_subticks = PICFW_PIC16F15356_TMR0_ISR_DIVIDER;
-    picfw_pic16f15356_isr_latch_tmr0(&app.hal);
+    picfw_pic16f15356_app_isr_host_rx(&app, 0xC0u);
+    picfw_pic16f15356_app_isr_host_rx(&app, 0x81u);
     picfw_pic16f15356_app_mainline_service(&app);
-    errors += expect_true(name, app.hal.latches.host_tx_ready == PICFW_FALSE,
-                          "host_tx_ready cleared after service");
-    errors += expect_true(name, app.hal.latches.bus_tx_ready == PICFW_FALSE,
-                          "bus_tx_ready cleared after service");
+    staged_before = app.hal.latches.host_tx_stage.count;
+    errors += expect_true(name, staged_before > 0u,
+                          "mainline stages host TX bytes");
+    tx_len = picfw_pic16f15356_app_drain_host_tx(&app, tx, sizeof(tx));
+    errors += expect_true(name, tx_len == 0u,
+                          "drain exposes no bytes before tx-ready");
+
+    startup_before = app.runtime.startup_state;
+    picfw_pic16f15356_app_isr_host_tx_ready(&app);
+    tx_len = picfw_pic16f15356_app_drain_host_tx(&app, tx, sizeof(tx));
+    errors += expect_true(name, tx_len == 1u,
+                          "one host byte transmitted per tx-ready pulse");
+    errors += expect_true(name,
+                          app.hal.latches.host_tx_stage.count + 1u ==
+                              staged_before,
+                          "stage count drops by one after tx-ready");
+    errors += expect_true(name, app.runtime.startup_state == startup_before,
+                          "tx-ready ISR does not mutate runtime state");
+
+    picfw_pic16f15356_app_isr_bus_tx_ready(&app);
+    errors += expect_true(name, app.hal.latches.bus_tx_ready == PICFW_TRUE,
+                          "bus_tx_ready latched by ISR");
   }
 
   /* App-level TX ISR wrappers */
   {
     picfw_pic16f15356_app_t app;
     picfw_runtime_config_t cfg;
+    uint8_t tx[8];
+    size_t tx_len;
     picfw_runtime_config_init_default(&cfg);
     picfw_pic16f15356_app_init(&app, &cfg);
     picfw_pic16f15356_app_isr_host_tx_ready(&app);
     errors += expect_true(name, app.hal.latches.host_tx_ready == PICFW_TRUE,
                           "app host_tx_ready forwarded");
+    tx_len = picfw_pic16f15356_app_drain_host_tx(&app, tx, sizeof(tx));
+    errors += expect_true(name, tx_len == 0u,
+                          "no transmitted byte while stage empty");
     picfw_pic16f15356_app_isr_bus_tx_ready(&app);
     errors += expect_true(name, app.hal.latches.bus_tx_ready == PICFW_TRUE,
                           "app bus_tx_ready forwarded");
@@ -3535,7 +3719,7 @@ static int test_gpio_and_pin_model(void) {
   picfw_pic16f15356_hal_write_pin(0, PICFW_PORT_A, 0u, PICFW_TRUE); /* null guard */
 
   /* GPIO read Port C */
-  hal.latches.portc_input = 0x01u; /* RC0=1 */
+  hal.profile.portc_input = 0x01u; /* RC0=1 */
   errors += expect_true(name,
                         picfw_pic16f15356_hal_read_pin(&hal, PICFW_PORT_C, 0u) == PICFW_TRUE,
                         "read RC0 high");
@@ -3550,13 +3734,13 @@ static int test_gpio_and_pin_model(void) {
   errors += expect_true(name, (hal.regs.latc & 0x02u) != 0u, "write LATC bit 1");
 
   /* Strap: WIFI variant (A low, B high) */
-  hal.latches.porta_input = 0x32u; /* RA0=0, RA1=1, RA4=1, RA5=1 */
+  hal.profile.porta_input = 0x32u; /* RA0=0, RA1=1, RA4=1, RA5=1 */
   picfw_pic16f15356_hal_read_straps(&hal, &straps);
   errors += expect_true(name, straps.variant == PICFW_VARIANT_WIFI,
                         "strap: WIFI variant (A low, B high)");
 
   /* Strap: standard protocol (RA4 low) */
-  hal.latches.porta_input = 0x23u; /* RA0=1, RA1=1, RA4=0, RA5=1 */
+  hal.profile.porta_input = 0x23u; /* RA0=1, RA1=1, RA4=0, RA5=1 */
   picfw_pic16f15356_hal_read_straps(&hal, &straps);
   errors += expect_true(name, straps.enhanced_protocol == PICFW_FALSE,
                         "strap: standard protocol (RA4 low)");
@@ -3594,7 +3778,7 @@ static int test_ethernet_stack(void) {
   uint8_t mac[6];
 
   /* --- Init: Ethernet variant sets LINK_WAIT --- */
-  picfw_ethernet_init(&eth, PICFW_VARIANT_ETHERNET);
+  picfw_ethernet_init(&eth, PICFW_VARIANT_ETHERNET, 0);
   errors += expect_true(name,
                         eth.state == PICFW_ETH_STATE_LINK_WAIT,
                         "init ethernet variant -> LINK_WAIT");
@@ -3609,12 +3793,12 @@ static int test_ethernet_stack(void) {
                         "init sets MAC OUI byte 2");
 
   /* --- Init: non-Ethernet variant sets DISABLED --- */
-  picfw_ethernet_init(&eth, PICFW_VARIANT_WIFI);
+  picfw_ethernet_init(&eth, PICFW_VARIANT_WIFI, 0);
   errors += expect_true(name,
                         eth.state == PICFW_ETH_STATE_DISABLED,
                         "init wifi variant -> DISABLED");
 
-  picfw_ethernet_init(&eth, PICFW_VARIANT_RPI_USB);
+  picfw_ethernet_init(&eth, PICFW_VARIANT_RPI_USB, 0);
   errors += expect_true(name,
                         eth.state == PICFW_ETH_STATE_DISABLED,
                         "init rpi variant -> DISABLED");
@@ -3623,14 +3807,14 @@ static int test_ethernet_stack(void) {
   picfw_w5500_init(&w5500);
   picfw_eeprom_init(&eeprom);
   picfw_led_init(&led);
-  picfw_ethernet_init(&eth, PICFW_VARIANT_RPI_USB);
+  picfw_ethernet_init(&eth, PICFW_VARIANT_RPI_USB, 0);
   picfw_ethernet_service(&eth, &w5500, &eeprom, &led, 1000u);
   errors += expect_true(name,
                         eth.state == PICFW_ETH_STATE_DISABLED,
                         "disabled: service stays DISABLED");
 
   /* --- LINK_WAIT: no link stays in LINK_WAIT, LED blink fast --- */
-  picfw_ethernet_init(&eth, PICFW_VARIANT_ETHERNET);
+  picfw_ethernet_init(&eth, PICFW_VARIANT_ETHERNET, 0);
   picfw_w5500_init(&w5500);
   picfw_led_init(&led);
   /* W5500 link down by default (PHYCFGR bit 0 = 0) */
@@ -3723,7 +3907,7 @@ static int test_ethernet_stack(void) {
     picfw_eeprom_write_ip_config(&eeprom, &cfg);
   }
 
-  picfw_ethernet_init(&eth, PICFW_VARIANT_ETHERNET);
+  picfw_ethernet_init(&eth, PICFW_VARIANT_ETHERNET, 0);
   picfw_w5500_init(&w5500);
   picfw_led_init(&led);
   /* Link up */
@@ -3757,7 +3941,7 @@ static int test_ethernet_stack(void) {
                         "derive_mac: seed bytes in bytes 3-5");
 
   /* --- Null guards --- */
-  picfw_ethernet_init(0, PICFW_VARIANT_ETHERNET); /* no crash */
+  picfw_ethernet_init(0, PICFW_VARIANT_ETHERNET, 0); /* no crash */
   picfw_ethernet_service(0, &w5500, &eeprom, &led, 0u); /* no crash */
   picfw_ethernet_service(&eth, 0, &eeprom, &led, 0u); /* no crash */
   picfw_ethernet_service(&eth, &w5500, &eeprom, 0, 0u); /* no crash */
@@ -3765,7 +3949,7 @@ static int test_ethernet_stack(void) {
   picfw_ethernet_derive_mac(seed, 0); /* no crash */
 
   /* --- EEPROM null: falls back to DHCP --- */
-  picfw_ethernet_init(&eth, PICFW_VARIANT_ETHERNET);
+  picfw_ethernet_init(&eth, PICFW_VARIANT_ETHERNET, 0);
   picfw_w5500_init(&w5500);
   picfw_led_init(&led);
   picfw_w5500_write_common(&w5500, PICFW_W5500_PHYCFGR, 0x01u);
@@ -3784,14 +3968,14 @@ static int test_ethernet_stack(void) {
     picfw_pic16f15356_straps_t straps;
     picfw_pic16f15356_hal_runtime_init(&hal);
     /* Override strap inputs for Ethernet: both A0 and A1 low */
-    hal.latches.porta_input = 0x30u; /* RA0=0, RA1=0, RA4=1, RA5=1 */
+    hal.profile.porta_input = 0x30u; /* RA0=0, RA1=0, RA4=1, RA5=1 */
     picfw_pic16f15356_hal_read_straps(&hal, &straps);
     errors += expect_true(name,
                           straps.variant == PICFW_VARIANT_ETHERNET,
                           "HAL: straps decode Ethernet variant");
     hal.ethernet_variant =
         (picfw_bool_t)(straps.variant == PICFW_VARIANT_ETHERNET);
-    picfw_ethernet_init(&hal.ethernet, straps.variant);
+    picfw_ethernet_init(&hal.ethernet, straps.variant, 0);
     errors += expect_true(name,
                           hal.ethernet_variant == PICFW_TRUE,
                           "HAL: ethernet_variant set for Ethernet straps");
@@ -3828,6 +4012,12 @@ int main(void) {
     return 1;
   }
   if (test_pic16f15356_app_shell() != 0) {
+    return 1;
+  }
+  if (test_loader_config_decode_and_cache() != 0) {
+    return 1;
+  }
+  if (test_app_loader_config_normalization() != 0) {
     return 1;
   }
   if (test_runtime_init_and_info() != 0) {
@@ -3941,7 +4131,7 @@ int main(void) {
   if (test_wifi_check_startup_gate() != 0) {
     return 1;
   }
-  if (test_921600_baud_mode() != 0) {
+  if (test_uart_role_split() != 0) {
     return 1;
   }
   if (test_eeprom_ip_config() != 0) {

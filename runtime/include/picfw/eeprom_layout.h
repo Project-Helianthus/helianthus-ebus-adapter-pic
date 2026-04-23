@@ -3,11 +3,12 @@
 
 #include "eeprom.h"
 
-/* EEPROM layout convention for PIC16F15356 eBUS adapter network config.
+/* EEPROM layout convention for the current host-buildable firmware model.
  *
- * This defines the byte offsets and structure for IP configuration
- * stored in EEPROM.  The bootloader's READ_EE_DATA / WRITE_EE_DATA
- * commands (via ebuspicloader -i IP -m MASK) write to these offsets.
+ * This defines a CRC/version-stamped IP configuration block stored in the
+ * runtime EEPROM mirror. It is NOT the same layout as ebuspicloader's legacy
+ * WRITE_CONFIG payload. Keeping that distinction explicit avoids pretending
+ * first-provisioning parity that the current codebase does not yet implement.
  *
  * Layout:
  *   0x00-0x01: Magic bytes (0x55, 0xAA) — set by eeprom_init

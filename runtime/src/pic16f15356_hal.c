@@ -1,4 +1,4 @@
-#include "picfw/pic16f15356_hal.h"
+#include "picfw/pic16f15356_hal_internal.h"
 
 #include <string.h>
 
@@ -6,64 +6,109 @@
 _Static_assert(
     (PICFW_PIC16F15356_ISR_LATCH_CAP &
      (PICFW_PIC16F15356_ISR_LATCH_CAP - 1u)) == 0u,
-    "ISR_LATCH_CAP must be power of 2 for bitmask indexing");
+    "ISR_LATCH_CAP must be power of 2");
 _Static_assert(
-    sizeof(picfw_pic16f15356_registers_t) <= 48u,
-    "registers struct grew beyond expected size — review new fields");
+    (PICFW_PIC16F15356_HOST_TX_STAGE_CAP &
+     (PICFW_PIC16F15356_HOST_TX_STAGE_CAP - 1u)) == 0u,
+    "HOST_TX_STAGE_CAP must be power of 2");
+_Static_assert(
+    sizeof(picfw_pic16f15356_registers_t) <= 64u,
+    "registers struct grew beyond expected size");
 #endif
 
-static void picfw_pic16f15356_byte_fifo_init(picfw_pic16f15356_byte_fifo_t *fifo) {
+static void ring_reset(uint8_t *head, uint8_t *tail, uint8_t *count) {
+  if (head == 0 || tail == 0 || count == 0) {
+    return;
+  }
+
+  *head = 0u;
+  *tail = 0u;
+  *count = 0u;
+}
+
+static picfw_bool_t ring_push(uint8_t *items, uint8_t cap, uint8_t *tail,
+                              uint8_t *count, uint8_t value) {
+  if (items == 0 || tail == 0 || count == 0 || *count >= cap) {
+    return PICFW_FALSE;
+  }
+
+  items[*tail] = value;
+  *tail = (uint8_t)((*tail + 1u) & (cap - 1u));
+  (*count)++;
+  return PICFW_TRUE;
+}
+
+static picfw_bool_t ring_pop(const uint8_t *items, uint8_t cap, uint8_t *head,
+                             uint8_t *count, uint8_t *value) {
+  if (items == 0 || head == 0 || count == 0 || value == 0 || *count == 0u) {
+    return PICFW_FALSE;
+  }
+
+  *value = items[*head];
+  *head = (uint8_t)((*head + 1u) & (cap - 1u));
+  (*count)--;
+  return PICFW_TRUE;
+}
+
+static uint8_t ring_free_space(uint8_t cap, uint8_t count) {
+  return (uint8_t)(cap - count);
+}
+
+static void byte_fifo_init(picfw_pic16f15356_byte_fifo_t *fifo) {
   if (fifo == 0) {
     return;
   }
 
-  fifo->head = 0u;
-  fifo->tail = 0u;
-  fifo->count = 0u;
+  ring_reset(&fifo->head, &fifo->tail, &fifo->count);
 }
 
-static picfw_bool_t picfw_pic16f15356_byte_fifo_push(picfw_pic16f15356_byte_fifo_t *fifo, uint8_t value) {
-  if (fifo == 0 || fifo->count >= PICFW_PIC16F15356_ISR_LATCH_CAP) {
+static picfw_bool_t byte_fifo_push(picfw_pic16f15356_byte_fifo_t *fifo,
+                                   uint8_t value) {
+  if (fifo == 0) {
     return PICFW_FALSE;
   }
 
-  fifo->items[fifo->tail] = value;
-  fifo->tail = (uint8_t)((fifo->tail + 1u) & (PICFW_PIC16F15356_ISR_LATCH_CAP - 1u));
-  fifo->count++;
-  return PICFW_TRUE;
+  return ring_push(fifo->items, PICFW_PIC16F15356_ISR_LATCH_CAP, &fifo->tail,
+                   &fifo->count, value);
 }
 
-static picfw_bool_t picfw_pic16f15356_byte_fifo_pop(picfw_pic16f15356_byte_fifo_t *fifo, uint8_t *value) {
-  if (fifo == 0 || value == 0 || fifo->count == 0u) {
+static picfw_bool_t byte_fifo_pop(picfw_pic16f15356_byte_fifo_t *fifo,
+                                  uint8_t *value) {
+  if (fifo == 0) {
     return PICFW_FALSE;
   }
 
-  *value = fifo->items[fifo->head];
-  fifo->head = (uint8_t)((fifo->head + 1u) & (PICFW_PIC16F15356_ISR_LATCH_CAP - 1u));
-  fifo->count--;
-  return PICFW_TRUE;
+  return ring_pop(fifo->items, PICFW_PIC16F15356_ISR_LATCH_CAP, &fifo->head,
+                  &fifo->count, value);
 }
 
-static void picfw_pic16f15356_hal_init_latches(picfw_pic16f15356_hal_t *hal) {
+static void hal_init_latches(picfw_pic16f15356_hal_t *hal) {
   if (hal == 0) {
     return;
   }
 
-  picfw_pic16f15356_byte_fifo_init(&hal->latches.host_rx_fifo);
-  picfw_pic16f15356_byte_fifo_init(&hal->latches.bus_rx_fifo);
-  picfw_pic16f15356_byte_fifo_init(&hal->latches.host_tx_fifo);
+  byte_fifo_init(&hal->latches.host_rx_fifo);
+  byte_fifo_init(&hal->latches.bus_rx_fifo);
+  byte_fifo_init(&hal->latches.host_tx_stage);
   hal->latches.tmr0_isr_count = 0u;
   hal->latches.scheduler_subticks = 0u;
   hal->latches.scheduler_pending = 0u;
   hal->latches.host_rx_overruns = 0u;
   hal->latches.bus_rx_overruns = 0u;
   hal->latches.host_tx_overruns = 0u;
-  /* Simulated port inputs and TX-ready flags (test harness sets these) */
-  hal->latches.porta_input = 0u;
-  hal->latches.portb_input = 0u;
-  hal->latches.portc_input = 0u;
   hal->latches.host_tx_ready = PICFW_FALSE;
   hal->latches.bus_tx_ready = PICFW_FALSE;
+}
+
+void picfw_pic16f15356_nvm_init(picfw_pic16f15356_nvm_t *nvm) {
+  if (nvm == 0) {
+    return;
+  }
+
+  memset(nvm, 0, sizeof(*nvm));
+  picfw_eeprom_init(&nvm->eeprom);
+  picfw_loader_storage_init_default(&nvm->loader_storage);
+  nvm->initialized = PICFW_TRUE;
 }
 
 void picfw_pic16f15356_hal_reset(picfw_pic16f15356_hal_t *hal) {
@@ -72,51 +117,80 @@ void picfw_pic16f15356_hal_reset(picfw_pic16f15356_hal_t *hal) {
   }
 
   memset(hal, 0, sizeof(*hal));
-  picfw_pic16f15356_hal_init_latches(hal);
+  hal_init_latches(hal);
+  picfw_pic16f15356_hal_profile_reset(hal);
   hal->current_fosc_hz = PICFW_PIC16F15356_RESET_FOSC_HZ;
   hal->uart_mode = PICFW_PIC16F15356_UART_MODE_DEFAULT;
 }
 
-void picfw_pic16f15356_hal_set_uart_mode(picfw_pic16f15356_hal_t *hal, picfw_pic16f15356_uart_mode_t mode) {
-  uint16_t spbrg;
+static void hal_cache_loader_config(picfw_pic16f15356_hal_t *hal) {
+  picfw_ip_config_t ip_config;
 
   if (hal == 0) {
     return;
   }
 
-  hal->regs.baud1con = PICFW_PIC16F15356_APP_EUSART_BAUD1CON_INIT;
-  hal->regs.rc1sta = PICFW_PIC16F15356_APP_EUSART_RC1STA_INIT;
-  hal->regs.tx1sta = PICFW_PIC16F15356_APP_EUSART_TX1STA_INIT;
-  hal->uart_mode = mode;
-
-  if (mode == PICFW_PIC16F15356_UART_MODE_VERY_HIGH_SPEED) {
-    spbrg = PICFW_PIC16F15356_APP_EUSART_VERY_HIGH_SPEED_SPBRG;
-  } else if (mode == PICFW_PIC16F15356_UART_MODE_HIGH_SPEED) {
-    spbrg = PICFW_PIC16F15356_APP_EUSART_HIGH_SPEED_SPBRG;
-  } else {
-    spbrg = PICFW_PIC16F15356_APP_EUSART_DEFAULT_SPBRG;
-  }
-
-  hal->regs.sp1brgl = (uint8_t)(spbrg & 0x00FFu);
-  hal->regs.sp1brgh = (uint8_t)((spbrg >> 8) & 0x00FFu);
-
-  /* EUSART2 (host UART) mirrors EUSART1 baud rate and control */
-  hal->regs.baud2con = PICFW_PIC16F15356_APP_EUSART2_BAUD2CON_INIT;
-  hal->regs.rc2sta = PICFW_PIC16F15356_APP_EUSART2_RC2STA_INIT;
-  hal->regs.tx2sta = PICFW_PIC16F15356_APP_EUSART2_TX2STA_INIT;
-  hal->regs.sp2brgl = hal->regs.sp1brgl;
-  hal->regs.sp2brgh = hal->regs.sp1brgh;
+  picfw_loader_config_to_ip_config(&hal->loader_config, &ip_config);
+  picfw_eeprom_write_ip_config(&hal->eeprom, &ip_config);
 }
 
-uint16_t picfw_pic16f15356_hal_current_spbrg(const picfw_pic16f15356_hal_t *hal) {
+void picfw_pic16f15356_hal_set_uart_mode(
+    picfw_pic16f15356_hal_t *hal, picfw_pic16f15356_uart_mode_t mode) {
+  uint16_t bus_spbrg = PICFW_PIC16F15356_BUS_EUSART1_SPBRG;
+  uint16_t host_spbrg;
+
+  if (hal == 0) {
+    return;
+  }
+
+  hal->regs.baud1con = PICFW_PIC16F15356_BUS_EUSART1_BAUD1CON_INIT;
+  hal->regs.rc1sta = PICFW_PIC16F15356_BUS_EUSART1_RC1STA_INIT;
+  hal->regs.tx1sta = PICFW_PIC16F15356_BUS_EUSART1_TX1STA_INIT;
+  hal->regs.sp1brgl = (uint8_t)(bus_spbrg & 0x00FFu);
+  hal->regs.sp1brgh = (uint8_t)((bus_spbrg >> 8) & 0x00FFu);
+  hal->uart_mode = mode;
+
+  if (mode == PICFW_PIC16F15356_UART_MODE_HIGH_SPEED) {
+    host_spbrg = PICFW_PIC16F15356_HOST_EUSART2_HIGH_SPEED_SPBRG;
+  } else {
+    host_spbrg = PICFW_PIC16F15356_HOST_EUSART2_DEFAULT_SPBRG;
+  }
+
+  hal->regs.baud2con = PICFW_PIC16F15356_HOST_EUSART2_BAUD2CON_INIT;
+  hal->regs.rc2sta = PICFW_PIC16F15356_HOST_EUSART2_RC2STA_INIT;
+  hal->regs.tx2sta = PICFW_PIC16F15356_HOST_EUSART2_TX2STA_INIT;
+  hal->regs.sp2brgl = (uint8_t)(host_spbrg & 0x00FFu);
+  hal->regs.sp2brgh = (uint8_t)((host_spbrg >> 8) & 0x00FFu);
+}
+
+uint16_t picfw_pic16f15356_hal_current_bus_spbrg(
+    const picfw_pic16f15356_hal_t *hal) {
   if (hal == 0) {
     return 0u;
   }
 
-  return (uint16_t)((uint16_t)hal->regs.sp1brgl | ((uint16_t)hal->regs.sp1brgh << 8));
+  return (uint16_t)((uint16_t)hal->regs.sp1brgl |
+                    ((uint16_t)hal->regs.sp1brgh << 8));
 }
 
-void picfw_pic16f15356_hal_runtime_init(picfw_pic16f15356_hal_t *hal) {
+uint16_t picfw_pic16f15356_hal_current_host_spbrg(
+    const picfw_pic16f15356_hal_t *hal) {
+  if (hal == 0) {
+    return 0u;
+  }
+
+  return (uint16_t)((uint16_t)hal->regs.sp2brgl |
+                    ((uint16_t)hal->regs.sp2brgh << 8));
+}
+
+void picfw_pic16f15356_hal_runtime_init_with_nvm(
+    picfw_pic16f15356_hal_t *hal, picfw_pic16f15356_nvm_t *nvm) {
+  picfw_pic16f15356_straps_t straps;
+  picfw_loader_storage_t default_loader_storage;
+  const picfw_loader_storage_t *loader_storage;
+  picfw_bool_t pgc;
+  picfw_bool_t pgd;
+
   if (hal == 0) {
     return;
   }
@@ -130,9 +204,39 @@ void picfw_pic16f15356_hal_runtime_init(picfw_pic16f15356_hal_t *hal) {
   hal->regs.tmr0h = PICFW_PIC16F15356_TMR0_PERIOD_REG;
   hal->regs.tmr0l = 0u;
   hal->current_fosc_hz = PICFW_PIC16F15356_RUN_FOSC_HZ;
-  picfw_pic16f15356_hal_set_uart_mode(hal, PICFW_PIC16F15356_UART_MODE_DEFAULT);
 
-  /* GPIO direction and analog/digital select (from schematic) */
+  picfw_pic16f15356_hal_profile_apply_power_on_defaults(hal);
+
+  pgc = picfw_pic16f15356_hal_read_pin(
+      hal, PICFW_PIN_J11_PGC_PORT, PICFW_PIN_J11_PGC_BIT);
+  pgd = picfw_pic16f15356_hal_read_pin(
+      hal, PICFW_PIN_J11_PGD_PORT, PICFW_PIN_J11_PGD_BIT);
+  hal->bootloader_entry = (picfw_bool_t)(!pgc && !pgd);
+
+  if (nvm != 0 && nvm->initialized != PICFW_FALSE) {
+    hal->eeprom = nvm->eeprom;
+    loader_storage = &nvm->loader_storage;
+  } else {
+    picfw_eeprom_init(&hal->eeprom);
+    picfw_loader_storage_init_default(&default_loader_storage);
+    loader_storage = &default_loader_storage;
+  }
+
+  picfw_pic16f15356_hal_read_straps(hal, &straps);
+  picfw_loader_config_decode(loader_storage, &hal->loader_config);
+  picfw_loader_config_resolve_mode(&hal->loader_config, straps.variant,
+                                   straps.enhanced_protocol,
+                                   straps.high_speed, &hal->loader_mode);
+  hal->wifi_variant =
+      (picfw_bool_t)(hal->loader_mode.variant == PICFW_VARIANT_WIFI);
+  hal->ethernet_variant =
+      (picfw_bool_t)(hal->loader_mode.variant == PICFW_VARIANT_ETHERNET);
+  hal->wifi_ready = PICFW_FALSE;
+  picfw_pic16f15356_hal_set_uart_mode(
+      hal, hal->loader_mode.high_speed
+               ? PICFW_PIC16F15356_UART_MODE_HIGH_SPEED
+               : PICFW_PIC16F15356_UART_MODE_DEFAULT);
+
   hal->regs.trisa = PICFW_PIC16F15356_TRISA_INIT;
   hal->regs.trisb = PICFW_PIC16F15356_TRISB_INIT;
   hal->regs.trisc = PICFW_PIC16F15356_TRISC_INIT;
@@ -141,68 +245,51 @@ void picfw_pic16f15356_hal_runtime_init(picfw_pic16f15356_hal_t *hal) {
   hal->regs.anselc = PICFW_PIC16F15356_ANSELC_INIT;
   hal->regs.wpub = PICFW_PIC16F15356_WPUB_INIT;
 
-  /* PPS routing for EUSART1/2 */
   picfw_pic16f15356_hal_configure_pps(hal);
 
-  /* Initialize LED, EEPROM, and W5500 */
   picfw_led_init(&hal->led);
-  picfw_eeprom_init(&hal->eeprom);
+  hal_cache_loader_config(hal);
   picfw_w5500_init(&hal->w5500);
 
-  /* Simulation defaults: pull-up high on strap and signal-detect inputs */
-  hal->latches.porta_input = 0x33u; /* RA0,RA1,RA4,RA5 high (straps open) */
-  hal->latches.portb_input = 0xC2u; /* RB1=1(signal), RB6=1(PGC), RB7=1(PGD) */
-
-  /* J11 bootloader entry detection: read RB6 (PGC) + RB7 (PGD).
-   * Both LOW (shorted by J11 jumper) = enter bootloader mode.
-   * Note: in the simulation, this runs after PPS config (which does not
-   * touch RB6/RB7).  On real hardware, the read is the first GPIO
-   * operation at POR, before any peripheral configuration.
-   * On real hardware, this is the first GPIO read at POR.  In simulation,
-   * portb_input defaults to 0xC2 (normal boot, RB6+RB7 HIGH).  Tests
-   * verify the detection logic via direct read_pin calls after init. */
-  {
-    picfw_bool_t pgc = picfw_pic16f15356_hal_read_pin(
-        hal, PICFW_PIN_J11_PGC_PORT, PICFW_PIN_J11_PGC_BIT);
-    picfw_bool_t pgd = picfw_pic16f15356_hal_read_pin(
-        hal, PICFW_PIN_J11_PGD_PORT, PICFW_PIN_J11_PGD_BIT);
-    hal->bootloader_entry = (picfw_bool_t)(!pgc && !pgd);
+  if (hal->wifi_variant) {
+    picfw_led_set_state(&hal->led, PICFW_LED_BLINK_SLOW, 0u);
   }
+  picfw_ethernet_init(&hal->ethernet, hal->loader_mode.variant,
+                      hal->loader_config.mac);
 
-  /* Determine variant from straps and set initial LED state */
-  {
-    picfw_pic16f15356_straps_t straps;
-    picfw_pic16f15356_hal_read_straps(hal, &straps);
-    hal->wifi_variant = (picfw_bool_t)(straps.variant == PICFW_VARIANT_WIFI);
-    hal->ethernet_variant =
-        (picfw_bool_t)(straps.variant == PICFW_VARIANT_ETHERNET);
-    hal->wifi_ready = PICFW_FALSE;
-    if (hal->wifi_variant) {
-      picfw_led_set_state(&hal->led, PICFW_LED_BLINK_SLOW, 0u);
+  if (nvm != 0) {
+    nvm->eeprom = hal->eeprom;
+    if (nvm->initialized == PICFW_FALSE) {
+      nvm->loader_storage = *loader_storage;
     }
-    /* Initialize Ethernet stack (sets state to LINK_WAIT or DISABLED) */
-    picfw_ethernet_init(&hal->ethernet, straps.variant);
+    nvm->initialized = PICFW_TRUE;
   }
 }
 
-picfw_bool_t picfw_pic16f15356_isr_latch_host_rx(picfw_pic16f15356_hal_t *hal, uint8_t byte) {
+void picfw_pic16f15356_hal_runtime_init(picfw_pic16f15356_hal_t *hal) {
+  picfw_pic16f15356_hal_runtime_init_with_nvm(hal, 0);
+}
+
+picfw_bool_t picfw_pic16f15356_isr_latch_host_rx(picfw_pic16f15356_hal_t *hal,
+                                                 uint8_t byte) {
   if (hal == 0) {
     return PICFW_FALSE;
   }
 
-  if (!picfw_pic16f15356_byte_fifo_push(&hal->latches.host_rx_fifo, byte)) {
+  if (!byte_fifo_push(&hal->latches.host_rx_fifo, byte)) {
     hal->latches.host_rx_overruns++;
     return PICFW_FALSE;
   }
   return PICFW_TRUE;
 }
 
-picfw_bool_t picfw_pic16f15356_isr_latch_bus_rx(picfw_pic16f15356_hal_t *hal, uint8_t byte) {
+picfw_bool_t picfw_pic16f15356_isr_latch_bus_rx(picfw_pic16f15356_hal_t *hal,
+                                                uint8_t byte) {
   if (hal == 0) {
     return PICFW_FALSE;
   }
 
-  if (!picfw_pic16f15356_byte_fifo_push(&hal->latches.bus_rx_fifo, byte)) {
+  if (!byte_fifo_push(&hal->latches.bus_rx_fifo, byte)) {
     hal->latches.bus_rx_overruns++;
     return PICFW_FALSE;
   }
@@ -224,14 +311,16 @@ void picfw_pic16f15356_isr_latch_tmr0(picfw_pic16f15356_hal_t *hal) {
   }
 }
 
-static picfw_bool_t picfw_pic16f15356_mainline_deliver_bytes(picfw_pic16f15356_hal_t *hal, picfw_runtime_t *runtime) {
+static picfw_bool_t mainline_deliver_bytes(picfw_pic16f15356_hal_t *hal,
+                                           picfw_runtime_t *runtime) {
   uint8_t processed;
   picfw_bool_t delivered = PICFW_FALSE;
 
-  for (processed = 0u; processed < PICFW_PIC16F15356_MAINLINE_BYTE_BUDGET; ++processed) {
+  for (processed = 0u; processed < PICFW_PIC16F15356_MAINLINE_BYTE_BUDGET;
+       ++processed) {
     uint8_t value;
 
-    if (picfw_pic16f15356_byte_fifo_pop(&hal->latches.host_rx_fifo, &value)) {
+    if (byte_fifo_pop(&hal->latches.host_rx_fifo, &value)) {
       if (!picfw_runtime_isr_enqueue_host_byte(runtime, value)) {
         hal->latches.host_rx_overruns++;
       } else {
@@ -240,7 +329,7 @@ static picfw_bool_t picfw_pic16f15356_mainline_deliver_bytes(picfw_pic16f15356_h
       continue;
     }
 
-    if (picfw_pic16f15356_byte_fifo_pop(&hal->latches.bus_rx_fifo, &value)) {
+    if (byte_fifo_pop(&hal->latches.bus_rx_fifo, &value)) {
       if (!picfw_runtime_isr_enqueue_bus_byte(runtime, value)) {
         hal->latches.bus_rx_overruns++;
       } else {
@@ -255,24 +344,73 @@ static picfw_bool_t picfw_pic16f15356_mainline_deliver_bytes(picfw_pic16f15356_h
   return delivered;
 }
 
-static void picfw_pic16f15356_mainline_flush_host_tx(picfw_pic16f15356_hal_t *hal, picfw_runtime_t *runtime) {
-  uint8_t buffer[PICFW_RUNTIME_DRAIN_BUDGET];
+static void mainline_stage_host_tx(picfw_pic16f15356_hal_t *hal,
+                                   picfw_runtime_t *runtime) {
+  uint8_t buffer[PICFW_PIC16F15356_HOST_TX_STAGE_BUDGET];
+  uint8_t free_space;
+  size_t count;
   size_t idx;
-  size_t count = picfw_runtime_drain_host_tx(runtime, buffer, sizeof(buffer));
 
-  for (idx = 0u; idx < count && idx < PICFW_RUNTIME_DRAIN_BUDGET; ++idx) {
-    if (!picfw_pic16f15356_byte_fifo_push(&hal->latches.host_tx_fifo, buffer[idx])) {
+  if (hal == 0 || runtime == 0) {
+    return;
+  }
+
+  free_space = ring_free_space(PICFW_PIC16F15356_HOST_TX_STAGE_CAP,
+                               hal->latches.host_tx_stage.count);
+  if (free_space == 0u) {
+    return;
+  }
+
+  if (free_space > PICFW_PIC16F15356_HOST_TX_STAGE_BUDGET) {
+    free_space = PICFW_PIC16F15356_HOST_TX_STAGE_BUDGET;
+  }
+
+  count = picfw_runtime_drain_host_tx(runtime, buffer, free_space);
+  for (idx = 0u; idx < count; ++idx) {
+    if (!byte_fifo_push(&hal->latches.host_tx_stage, buffer[idx])) {
       hal->latches.host_tx_overruns += (uint32_t)(count - idx);
       break;
     }
   }
 }
 
-/* WiFi startup gate: blink LED until Wemos drives RB0 HIGH.
- * Returns TRUE if the gate is active (skip runtime processing). */
-static picfw_bool_t mainline_wifi_gate(picfw_pic16f15356_hal_t *hal) {
+static picfw_bool_t service_host_tx_if_ready(picfw_pic16f15356_hal_t *hal) {
+  uint8_t value;
+
+  if (hal == 0 || !hal->latches.host_tx_ready) {
+    return PICFW_FALSE;
+  }
+  if (!picfw_pic16f15356_hal_profile_host_tx_sink_ready(hal)) {
+    return PICFW_FALSE;
+  }
+  if (!byte_fifo_pop(&hal->latches.host_tx_stage, &value)) {
+    return PICFW_FALSE;
+  }
+
+  picfw_pic16f15356_hal_profile_emit_host_tx_byte(hal, value);
+  hal->latches.host_tx_ready = PICFW_FALSE;
+  return PICFW_TRUE;
+}
+
+static picfw_bool_t should_step_runtime(const picfw_runtime_t *runtime,
+                                        picfw_bool_t delivered,
+                                        picfw_bool_t advanced_time) {
+  if (runtime == 0) {
+    return PICFW_FALSE;
+  }
+
+  return (picfw_bool_t)(delivered || advanced_time ||
+                        runtime->event_queue.count > 0u);
+}
+
+static picfw_bool_t mainline_wifi_gate(picfw_pic16f15356_hal_t *hal,
+                                       picfw_runtime_t *runtime) {
   if (!hal->wifi_variant || hal->wifi_ready) {
-    return PICFW_FALSE; /* gate not active */
+    return PICFW_FALSE;
+  }
+
+  if (runtime != 0) {
+    (void)mainline_deliver_bytes(hal, runtime);
   }
 
   if (picfw_pic16f15356_hal_wifi_check(hal)) {
@@ -280,7 +418,6 @@ static picfw_bool_t mainline_wifi_gate(picfw_pic16f15356_hal_t *hal) {
     picfw_led_set_state(&hal->led, PICFW_LED_FADE_UP, hal->runtime_now_ms);
     hal->led.prev_state = PICFW_LED_NORMAL;
   }
-  /* Service LED even while waiting (for blink animation) */
   if (hal->latches.scheduler_pending > 0u) {
     hal->latches.scheduler_pending--;
     hal->runtime_now_ms += PICFW_RUNTIME_PLATFORM_SCHEDULER_PERIOD_MS;
@@ -289,12 +426,13 @@ static picfw_bool_t mainline_wifi_gate(picfw_pic16f15356_hal_t *hal) {
     picfw_bool_t led_out =
         picfw_led_service(&hal->led, hal->runtime_now_ms, 0u);
     picfw_pic16f15356_hal_write_pin(hal, PICFW_PIN_LED2_PORT,
-                                     PICFW_PIN_LED2_BIT, led_out);
+                                    PICFW_PIN_LED2_BIT, led_out);
   }
   return (picfw_bool_t)(!hal->wifi_ready);
 }
 
-picfw_bool_t picfw_pic16f15356_mainline_service(picfw_pic16f15356_hal_t *hal, picfw_runtime_t *runtime) {
+picfw_bool_t picfw_pic16f15356_mainline_service(picfw_pic16f15356_hal_t *hal,
+                                                picfw_runtime_t *runtime) {
   picfw_bool_t delivered;
   picfw_bool_t advanced_time = PICFW_FALSE;
 
@@ -302,11 +440,11 @@ picfw_bool_t picfw_pic16f15356_mainline_service(picfw_pic16f15356_hal_t *hal, pi
     return PICFW_FALSE;
   }
 
-  if (mainline_wifi_gate(hal)) {
+  if (mainline_wifi_gate(hal, runtime)) {
     return PICFW_FALSE;
   }
 
-  delivered = picfw_pic16f15356_mainline_deliver_bytes(hal, runtime);
+  delivered = mainline_deliver_bytes(hal, runtime);
 
   if (hal->latches.scheduler_pending > 0u) {
     hal->latches.scheduler_pending--;
@@ -314,121 +452,60 @@ picfw_bool_t picfw_pic16f15356_mainline_service(picfw_pic16f15356_hal_t *hal, pi
     advanced_time = PICFW_TRUE;
   }
 
-  /* Always sample bus-busy signal so the field is current even on idle cycles.
-   * RB1 HIGH = another device transmitting = defer frame emission. */
   runtime->bus_busy = picfw_pic16f15356_hal_signal_detect(hal);
 
-  if (!delivered && !advanced_time) {
+  if (!should_step_runtime(runtime, delivered, advanced_time)) {
+    (void)service_host_tx_if_ready(hal);
     return PICFW_FALSE;
   }
 
   picfw_runtime_step(runtime, hal->runtime_now_ms);
   hal->runtime_step_count++;
-  /* Consume TX-ready flags (set by ISR, cleared here each mainline cycle).
-   * Ordering: flags are cleared BEFORE flush because the simulation model
-   * pushes to an intermediate FIFO, not directly to TXREG.  On real hardware,
-   * the TX mechanism will be redesigned as interrupt-driven byte-by-byte
-   * TXREG writes where the ISR re-sets the flag after each shift-out. */
-  hal->latches.host_tx_ready = PICFW_FALSE;
-  hal->latches.bus_tx_ready = PICFW_FALSE;
 
-  /* LED state machine: derive flags from runtime state, service, write pin */
   {
     uint8_t led_flags = 0u;
     picfw_bool_t led_out;
     if (runtime->last_error != 0u) {
       led_flags |= PICFW_LED_FLAG_ERROR;
-      runtime->last_error = 0u; /* consume error edge */
+      runtime->last_error = 0u;
     }
     led_out = picfw_led_service(&hal->led, hal->runtime_now_ms, led_flags);
     picfw_pic16f15356_hal_write_pin(hal, PICFW_PIN_LED2_PORT,
-                                     PICFW_PIN_LED2_BIT, led_out);
+                                    PICFW_PIN_LED2_BIT, led_out);
   }
 
-  /* Ethernet stack: service link/DHCP/TCP state machine (Ethernet variant only) */
   if (hal->ethernet_variant) {
     picfw_ethernet_service(&hal->ethernet, &hal->w5500, &hal->eeprom,
                            &hal->led, hal->runtime_now_ms);
   }
 
-  picfw_pic16f15356_mainline_flush_host_tx(hal, runtime);
+  mainline_stage_host_tx(hal, runtime);
+  (void)service_host_tx_if_ready(hal);
+  hal->latches.bus_tx_ready = PICFW_FALSE;
   return PICFW_TRUE;
 }
 
-size_t picfw_pic16f15356_hal_drain_host_tx(picfw_pic16f15356_hal_t *hal, uint8_t *out, size_t out_cap) {
-  size_t out_len = 0u;
-
-  if (hal == 0 || out == 0) {
-    return 0u;
-  }
-
-  while (out_len < out_cap && hal->latches.host_tx_fifo.count > 0u) {
-    if (!picfw_pic16f15356_byte_fifo_pop(&hal->latches.host_tx_fifo, &out[out_len])) {
-      break;
-    }
-    out_len++;
-  }
-
-  return out_len;
+size_t picfw_pic16f15356_hal_drain_host_tx(picfw_pic16f15356_hal_t *hal,
+                                           uint8_t *out, size_t out_cap) {
+  return picfw_pic16f15356_hal_profile_drain_host_tx(hal, out, out_cap);
 }
 
-/* --- GPIO pin read/write (simulation model) ---
- *
- * Simulation note: read_pin always returns portX_input regardless of TRIS
- * direction, and write_pin always writes to LATx regardless of TRIS.
- * On real PIC16F hardware, reading a PORT register for an output pin returns
- * the actual pin level (normally matches LAT), and writing LAT on an input
- * pin is a valid "pre-staging" operation.  The simulation intentionally
- * decouples input stimuli (portX_input, set by test harness) from output
- * state (latX, set by write_pin).  On the real hardware port, read_pin
- * will be replaced with direct SFR reads (e.g. PORTAbits.RA4). */
-
-picfw_bool_t picfw_pic16f15356_hal_read_pin(const picfw_pic16f15356_hal_t *hal,
-                                             uint8_t port, uint8_t bit) {
-  uint8_t port_val;
-
+picfw_bool_t picfw_pic16f15356_hal_read_pin(
+    const picfw_pic16f15356_hal_t *hal, uint8_t port, uint8_t bit) {
   if (hal == 0 || bit > 7u) {
     return PICFW_FALSE;
   }
 
-  switch (port) {
-  case PICFW_PORT_A:
-    port_val = hal->latches.porta_input;
-    break;
-  case PICFW_PORT_B:
-    port_val = hal->latches.portb_input;
-    break;
-  case PICFW_PORT_C:
-    port_val = hal->latches.portc_input;
-    break;
-  default:
-    return PICFW_FALSE;
-  }
-
-  return (picfw_bool_t)((port_val >> bit) & 1u);
+  return picfw_pic16f15356_hal_profile_read_pin(hal, port, bit);
 }
 
-void picfw_pic16f15356_hal_write_pin(picfw_pic16f15356_hal_t *hal,
-                                      uint8_t port, uint8_t bit,
-                                      picfw_bool_t value) {
-  uint8_t *lat;
-
+void picfw_pic16f15356_hal_write_pin(picfw_pic16f15356_hal_t *hal, uint8_t port,
+                                     uint8_t bit, picfw_bool_t value) {
   if (hal == 0 || bit > 7u) {
     return;
   }
 
-  switch (port) {
-  case PICFW_PORT_A: lat = &hal->regs.lata; break;
-  case PICFW_PORT_B: lat = &hal->regs.latb; break;
-  case PICFW_PORT_C: lat = &hal->regs.latc; break;
-  default: return;
-  }
-
-  if (value) {
-    *lat = (uint8_t)(*lat | (1u << bit));
-  } else {
-    *lat = (uint8_t)(*lat & ~(1u << bit));
-  }
+  picfw_pic16f15356_hal_profile_write_pin(hal, port, bit, value);
 }
 
 picfw_bool_t picfw_pic16f15356_hal_signal_detect(
@@ -443,27 +520,19 @@ picfw_bool_t picfw_pic16f15356_hal_wifi_check(
       hal, PICFW_PIN_WIFI_CHECK_PORT, PICFW_PIN_WIFI_CHECK_BIT);
 }
 
-/* --- PPS configuration --- */
-
 void picfw_pic16f15356_hal_configure_pps(picfw_pic16f15356_hal_t *hal) {
   if (hal == 0) {
     return;
   }
 
-  /* EUSART1 RX: RB2 → RX1 input */
   hal->regs.rx1pps = PICFW_PPS_RB2_INPUT;
-  /* EUSART1 TX: RB3 → TX1 output */
   hal->regs.rb3pps = PICFW_PPS_EUSART1_TX;
-  /* EUSART2 RX: RC0 → RX2 input */
   hal->regs.rx2pps = PICFW_PPS_RC0_INPUT;
-  /* EUSART2 TX: RC1 → TX2 output */
   hal->regs.rc1pps_out = PICFW_PPS_EUSART2_TX;
 }
 
-/* --- J12 AUX strap read --- */
-
 void picfw_pic16f15356_hal_read_straps(const picfw_pic16f15356_hal_t *hal,
-                                        picfw_pic16f15356_straps_t *straps) {
+                                       picfw_pic16f15356_straps_t *straps) {
   picfw_bool_t protocol_pin;
   picfw_bool_t speed_pin;
   picfw_bool_t variant_a;
@@ -478,30 +547,18 @@ void picfw_pic16f15356_hal_read_straps(const picfw_pic16f15356_hal_t *hal,
     return;
   }
 
-  /* Active-low: open (pulled high) = feature enabled */
   protocol_pin = picfw_pic16f15356_hal_read_pin(
       hal, PICFW_STRAP_PROTOCOL_PORT, PICFW_STRAP_PROTOCOL_BIT);
-  speed_pin = picfw_pic16f15356_hal_read_pin(
-      hal, PICFW_STRAP_SPEED_PORT, PICFW_STRAP_SPEED_BIT);
+  speed_pin = picfw_pic16f15356_hal_read_pin(hal, PICFW_STRAP_SPEED_PORT,
+                                             PICFW_STRAP_SPEED_BIT);
   variant_a = picfw_pic16f15356_hal_read_pin(
       hal, PICFW_STRAP_VARIANT_PORT, PICFW_STRAP_VARIANT_BIT);
   variant_b = picfw_pic16f15356_hal_read_pin(
       hal, PICFW_STRAP_VARIANT2_PORT, PICFW_STRAP_VARIANT2_BIT);
 
-  /* J12 strap polarity — asymmetry is hardware design intent:
-   * - Protocol (Pin 2/RA4): "open = enhanced" — pull-up HIGH = feature active.
-   *   Enhanced is the safe default for ebusd users, so direct mapping.
-   * - Speed (Pin 7/RA5): "open = normal-speed" — pull-up HIGH = safe default.
-   *   High-speed requires deliberate grounding, so inverted mapping. */
-  straps->enhanced_protocol = protocol_pin;            /* HIGH = enhanced */
-  straps->high_speed = (picfw_bool_t)(!speed_pin);     /* LOW  = high-speed */
+  straps->enhanced_protocol = protocol_pin;
+  straps->high_speed = (picfw_bool_t)(!speed_pin);
 
-  /* Variant decode from J12 Pin 5 (RA0/RA1):
-   *   both high (open)     = RPi/USB  (0) — default, no jumper
-   *   A low, B high        = WIFI     (1) — Pin 5 to Pin 4 (v3.0)
-   *   both low             = Ethernet (2) — Pin 5 to GND
-   *   A high, B low        = impossible physical state (J12 wiring pulls
-   *                          both pins together); falls to RPi/USB default */
   if (!variant_a && !variant_b) {
     straps->variant = PICFW_VARIANT_ETHERNET;
   } else if (!variant_a) {
@@ -511,13 +568,40 @@ void picfw_pic16f15356_hal_read_straps(const picfw_pic16f15356_hal_t *hal,
   }
 }
 
-/* --- TX ISR handlers (EUSART TX register empty) --- */
-
 void picfw_pic16f15356_isr_latch_host_tx_ready(picfw_pic16f15356_hal_t *hal) {
+  uint8_t value;
+
   if (hal == 0) {
     return;
   }
   hal->latches.host_tx_ready = PICFW_TRUE;
+  if (hal->latches.host_tx_stage.count == 0u) {
+    return;
+  }
+#if PICFW_HAL_ACTIVE_PROFILE == PICFW_HAL_PROFILE_SIM
+  if (hal->profile.host_tx_outbox.count >= PICFW_RUNTIME_HOST_TX_CAP) {
+    hal->latches.host_tx_overruns++;
+    return;
+  }
+#else
+  if (hal->profile.host_txreg_loaded != PICFW_FALSE) {
+    return;
+  }
+#endif
+  value = hal->latches.host_tx_stage.items[hal->latches.host_tx_stage.head];
+  hal->latches.host_tx_stage.head = (uint8_t)(
+      (hal->latches.host_tx_stage.head + 1u) &
+      (PICFW_PIC16F15356_HOST_TX_STAGE_CAP - 1u));
+  hal->latches.host_tx_stage.count--;
+#if PICFW_HAL_ACTIVE_PROFILE == PICFW_HAL_PROFILE_SIM
+  hal->regs.tx2reg = value; hal->profile.host_tx_outbox.items[hal->profile.host_tx_outbox.tail] = value;
+  hal->profile.host_tx_outbox.tail = (uint8_t)(
+      (hal->profile.host_tx_outbox.tail + 1u) &
+      (PICFW_RUNTIME_HOST_TX_CAP - 1u)); hal->profile.host_tx_outbox.count++;
+#else
+  hal->regs.tx2reg = value; hal->profile.host_txreg_loaded = PICFW_TRUE;
+#endif
+  hal->latches.host_tx_ready = PICFW_FALSE;
 }
 
 void picfw_pic16f15356_isr_latch_bus_tx_ready(picfw_pic16f15356_hal_t *hal) {

@@ -5,11 +5,10 @@
 /* CRC16-CCITT (same algorithm as bootloader's picboot_crc16_ccitt). */
 static uint16_t crc16_ccitt(const uint8_t *data, uint8_t len) {
   uint16_t crc = 0xFFFFu;
-  uint8_t i;
   uint8_t j;
 
-  for (i = 0u; i < len; i++) {
-    crc = (uint16_t)(crc ^ ((uint16_t)data[i] << 8));
+  while (len > 0u) {
+    crc = (uint16_t)(crc ^ ((uint16_t)(*data) << 8));
     for (j = 0u; j < 8u; j++) {
       if ((crc & 0x8000u) != 0u) {
         crc = (uint16_t)((crc << 1) ^ 0x1021u);
@@ -17,6 +16,8 @@ static uint16_t crc16_ccitt(const uint8_t *data, uint8_t len) {
         crc = (uint16_t)(crc << 1);
       }
     }
+    data++;
+    len--;
   }
   return crc;
 }

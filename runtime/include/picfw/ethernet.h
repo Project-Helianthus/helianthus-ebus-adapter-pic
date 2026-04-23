@@ -79,7 +79,8 @@ typedef struct picfw_ethernet {
 /* Initialize ethernet state based on platform variant.
  * If variant == PICFW_VARIANT_ETHERNET, sets state to LINK_WAIT.
  * Otherwise, sets state to DISABLED. */
-void picfw_ethernet_init(picfw_ethernet_t *eth, uint8_t variant);
+void picfw_ethernet_init(picfw_ethernet_t *eth, uint8_t variant,
+                         const uint8_t *mac);
 
 /* Service the ethernet state machine. Called once per mainline cycle.
  * Drives W5500 link detection, DHCP, IP configuration, and TCP listen.

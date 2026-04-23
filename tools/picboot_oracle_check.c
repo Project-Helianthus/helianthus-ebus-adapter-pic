@@ -10,6 +10,14 @@ typedef struct picboot_oracle_model {
     uint8_t config_space[PICBOOT_CONFIG_SPACE_SIZE];
 } picboot_oracle_model_t;
 
+typedef struct picboot_target_backend {
+    picboot_oracle_model_t model;
+    bool reset_called;
+    uint16_t last_application_entry;
+} picboot_target_backend_t;
+
+static void model_erase_flash(picboot_oracle_model_t *model, uint16_t address_words, uint16_t blocks);
+
 static void print_hex_bytes(const uint8_t *data, size_t len) {
     size_t idx;
 
@@ -86,6 +94,100 @@ static void model_init(picboot_oracle_model_t *model) {
     model_init_ee(model);
     model_init_config(model);
 }
+
+static bool target_read_flash(void *ctx, uint16_t address_words, uint8_t *out, uint16_t length) {
+    picboot_target_backend_t *backend = (picboot_target_backend_t *)ctx;
+    size_t offset = (size_t)address_words * 2u;
+
+    if (backend == NULL || out == NULL) {
+        return false;
+    }
+    memcpy(out, &backend->model.flash[offset], length);
+    return true;
+}
+
+static bool target_write_flash(void *ctx, uint16_t address_words, const uint8_t *data, uint16_t length) {
+    picboot_target_backend_t *backend = (picboot_target_backend_t *)ctx;
+    size_t offset = (size_t)address_words * 2u;
+
+    if (backend == NULL || data == NULL) {
+        return false;
+    }
+    memcpy(&backend->model.flash[offset], data, length);
+    return true;
+}
+
+static bool target_erase_flash(void *ctx, uint16_t address_words, uint16_t blocks) {
+    picboot_target_backend_t *backend = (picboot_target_backend_t *)ctx;
+
+    if (backend == NULL) {
+        return false;
+    }
+    model_erase_flash(&backend->model, address_words, blocks);
+    return true;
+}
+
+static bool target_read_ee(void *ctx, uint16_t address, uint8_t *out, uint16_t length) {
+    picboot_target_backend_t *backend = (picboot_target_backend_t *)ctx;
+
+    if (backend == NULL || out == NULL) {
+        return false;
+    }
+    memcpy(out, &backend->model.ee_data[address], length);
+    return true;
+}
+
+static bool target_write_ee(void *ctx, uint16_t address, const uint8_t *data, uint16_t length) {
+    picboot_target_backend_t *backend = (picboot_target_backend_t *)ctx;
+
+    if (backend == NULL || data == NULL) {
+        return false;
+    }
+    memcpy(&backend->model.ee_data[address], data, length);
+    return true;
+}
+
+static bool target_read_config(void *ctx, uint16_t address, uint8_t *out, uint16_t length) {
+    picboot_target_backend_t *backend = (picboot_target_backend_t *)ctx;
+
+    if (backend == NULL || out == NULL) {
+        return false;
+    }
+    memcpy(out, &backend->model.config_space[address], length);
+    return true;
+}
+
+static bool target_write_config(void *ctx, uint16_t address, const uint8_t *data, uint16_t length) {
+    picboot_target_backend_t *backend = (picboot_target_backend_t *)ctx;
+
+    if (backend == NULL || data == NULL) {
+        return false;
+    }
+    memcpy(&backend->model.config_space[address], data, length);
+    return true;
+}
+
+static bool target_reset_device(void *ctx, uint16_t application_entry) {
+    picboot_target_backend_t *backend = (picboot_target_backend_t *)ctx;
+
+    if (backend == NULL) {
+        return false;
+    }
+    backend->reset_called = true;
+    backend->last_application_entry = application_entry;
+    return true;
+}
+
+static const picboot_target_backend_ops_t TARGET_BACKEND_OPS = {
+    target_read_flash,
+    target_write_flash,
+    target_erase_flash,
+    target_read_ee,
+    target_write_ee,
+    target_read_config,
+    target_write_config,
+    target_reset_device,
+};
 
 static void model_write_flash(picboot_oracle_model_t *model, uint16_t address_words, const uint8_t *payload, size_t len) {
     size_t offset = (size_t)address_words * 2u;
@@ -525,6 +627,84 @@ static int check_ee_and_config(picboot_bootloader_t *bootloader, picboot_oracle_
     return 0;
 }
 
+static int check_target_profile(void) {
+    const char *name = "target_profile";
+    picboot_target_backend_t backend;
+    picboot_target_t target;
+    picboot_metadata_t metadata;
+    picboot_frame_t request;
+    picboot_frame_t response;
+    picboot_version_payload_t payload;
+    uint8_t write_payload[8];
+
+    memset(&backend, 0, sizeof(backend));
+    model_init(&backend.model);
+    picboot_metadata_init(&metadata);
+    picboot_target_init_with_metadata(&target, &metadata, &TARGET_BACKEND_OPS,
+                                      &backend);
+
+    request = picboot_make_request(PICBOOT_READ_VERSION, 0u, 0u, NULL, 0u);
+    if (!picboot_target_process_request(&target, &request, &response)) {
+        fprintf(stderr, "[FAIL] %s: read_version request failed\n", name);
+        return 1;
+    }
+    picboot_build_version_payload_from_metadata(&metadata, &payload);
+    if (expect_u16(name, response.header.data_length, sizeof(payload),
+                   "target version length")) {
+        return 1;
+    }
+    if (expect_bytes(name, response.header.data, (const uint8_t *)&payload,
+                     sizeof(payload))) {
+        return 1;
+    }
+
+    write_payload[0] = 0x10u;
+    write_payload[1] = 0x20u;
+    write_payload[2] = 0x30u;
+    write_payload[3] = 0x40u;
+    write_payload[4] = 0x50u;
+    write_payload[5] = 0x60u;
+    write_payload[6] = 0x70u;
+    write_payload[7] = 0x80u;
+    request = picboot_make_request(PICBOOT_WRITE_CONFIG, 0x0106u, 8u,
+                                   write_payload, sizeof(write_payload));
+    make_unlock_request(&request);
+    if (!picboot_target_process_request(&target, &request, &response)) {
+        fprintf(stderr, "[FAIL] %s: write_config request failed\n", name);
+        return 1;
+    }
+    if (response.header.data_length != 1u ||
+        response.header.data[0] != PICBOOT_COMMAND_SUCCESS) {
+        fprintf(stderr, "[FAIL] %s: write_config status\n", name);
+        return 1;
+    }
+
+    request = picboot_make_request(PICBOOT_READ_CONFIG, 0x0106u, 8u, NULL, 0u);
+    if (!picboot_target_process_request(&target, &request, &response)) {
+        fprintf(stderr, "[FAIL] %s: read_config request failed\n", name);
+        return 1;
+    }
+    if (expect_bytes(name, response.header.data, write_payload,
+                     sizeof(write_payload))) {
+        return 1;
+    }
+
+    request = picboot_make_request(PICBOOT_RESET_DEVICE, 0u, 0u, NULL, 0u);
+    if (!picboot_target_process_request(&target, &request, &response)) {
+        fprintf(stderr, "[FAIL] %s: reset request failed\n", name);
+        return 1;
+    }
+    if (!backend.reset_called ||
+        backend.last_application_entry != PICBOOT_APPLICATION_ENTRY ||
+        !target.application_running || !target.parser.reset_requested ||
+        target.reset_counter != 1u) {
+        fprintf(stderr, "[FAIL] %s: reset handoff state mismatch\n", name);
+        return 1;
+    }
+
+    return 0;
+}
+
 static int check_stream_parser(void) {
     picboot_bootloader_t bootloader;
     picboot_frame_t response;
@@ -615,6 +795,51 @@ static int check_stream_parser_with_payload(void) {
         bootloader.flash[PICBOOT_END_BOOT * 2u + 1u] != 0x22u) {
         fprintf(stderr, "[FAIL] stream_parser_payload: flash not written\n");
         return 4;
+    }
+    return 0;
+}
+
+static int check_target_stream_parser(void) {
+    picboot_target_backend_t backend;
+    picboot_target_t target;
+    picboot_frame_t response;
+    const uint8_t raw_request[] = {
+        PICBOOT_STX,
+        0x07u,
+        0x08u, 0x00u,
+        0x55u,
+        0xAAu,
+        0x06u,
+        0x01u,
+        0x00u,
+        0x00u,
+        0x10u, 0x20u, 0x30u, 0x40u,
+        0x50u, 0x60u, 0x70u, 0x80u,
+    };
+    size_t index;
+    picboot_feed_result_t result;
+
+    memset(&backend, 0, sizeof(backend));
+    model_init(&backend.model);
+    picboot_target_init(&target, &TARGET_BACKEND_OPS, &backend);
+    picboot_frame_clear(&response);
+    result = PICBOOT_FEED_NEED_MORE;
+    for (index = 0u; index < sizeof(raw_request); ++index) {
+        result = picboot_target_feed(&target, raw_request[index], &response);
+    }
+    if (result != PICBOOT_FEED_FRAME_READY) {
+        fprintf(stderr, "[FAIL] target_stream_parser: expected FRAME_READY\n");
+        return 1;
+    }
+    if (response.header.command != PICBOOT_WRITE_CONFIG ||
+        response.header.data_length != 1u ||
+        response.header.data[0] != PICBOOT_COMMAND_SUCCESS) {
+        fprintf(stderr, "[FAIL] target_stream_parser: wrong response\n");
+        return 2;
+    }
+    if (memcmp(&backend.model.config_space[0x0106u], &raw_request[10], 8u) != 0) {
+        fprintf(stderr, "[FAIL] target_stream_parser: config not written\n");
+        return 3;
     }
     return 0;
 }
@@ -907,6 +1132,18 @@ int main(int argc, char **argv) {
     rc = check_stream_parser_with_payload();
     if (rc != 0) {
         fprintf(stderr, "stream parser payload check failed: %d\n", rc);
+        return rc;
+    }
+
+    rc = check_target_profile();
+    if (rc != 0) {
+        fprintf(stderr, "target profile check failed: %d\n", rc);
+        return rc;
+    }
+
+    rc = check_target_stream_parser();
+    if (rc != 0) {
+        fprintf(stderr, "target stream parser check failed: %d\n", rc);
         return rc;
     }
 

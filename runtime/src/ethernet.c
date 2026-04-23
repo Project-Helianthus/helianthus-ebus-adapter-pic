@@ -150,7 +150,8 @@ static void service_tcp_connected(picfw_ethernet_t *eth,
   }
 }
 
-void picfw_ethernet_init(picfw_ethernet_t *eth, uint8_t variant) {
+void picfw_ethernet_init(picfw_ethernet_t *eth, uint8_t variant,
+                         const uint8_t *mac) {
   if (eth == 0) {
     return;
   }
@@ -159,7 +160,9 @@ void picfw_ethernet_init(picfw_ethernet_t *eth, uint8_t variant) {
 
   if (variant == PICFW_VARIANT_ETHERNET) {
     eth->state = PICFW_ETH_STATE_LINK_WAIT;
-    {
+    if (mac != 0) {
+      memcpy(eth->mac, mac, 6u);
+    } else {
       uint8_t seed[3] = {0x01u, 0x00u, 0x01u};
       picfw_ethernet_derive_mac(seed, eth->mac);
     }

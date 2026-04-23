@@ -10,17 +10,25 @@
 
 ## What This Is
 
-This is a clean-room firmware implementation for the PIC16F15356 microcontroller used in eBUS adapter v3.x hardware. It implements the Enhanced (ENH) adapter protocol, providing a transparent UART bridge between an ESP host and the eBUS wire.
+This repository contains a clean-room, host-buildable firmware tree for the PIC16F15356 used in eBUS adapter v3.x hardware. It includes:
 
-**This firmware was generated 100% by AI agents.** No line of code was written by a human. Every function, test, assertion, and comment was authored by AI agents (OpenAI Codex GPT-5.4 and Anthropic Claude Opus 4) operating under human architectural direction and adversarial review.
+- a deterministic runtime scaffold for the northbound adapter protocol
+- a split PIC16F15356 HAL under one public API:
+  simulation profile for host/oracle work and silicon profile for XC8 bring-up
+- a staged host TX path where mainline fills a bounded queue and TX-ready
+  service exposes one transmitted byte at a time
+- a canonical provisioning normalization path from legacy `WRITE_CONFIG`
+- a split bootloader engine: host-side memory model plus target-facing backend profile
+- a Go oracle parity harness in `helianthus-tinyebus`
+
+It does **not** yet prove first-power-on success on real PIC silicon. XC8-backed NVM register access, W5500/SPI, DHCP, and several provisioning paths remain simulation models or target-facing scaffolds.
 
 ## Objectives
 
-1. **Feature parity** with the original production adapter firmware (reverse-engineered via Ghidra decompilation of the legacy `combined.hex` image)
-2. **Perfect determinism** — zero jitter, bounded latency, fully predictable execution on every code path
-3. **Provable correctness** — 64 adversarial findings identified across 8 independent review agents, all resolved to convergence (0 CRITICAL, 0 HIGH, 0 MEDIUM)
-4. **Oracle-validated** — C implementation cross-validated against a Go reference oracle (`helianthus-tinyebus`) for bit-exact parity
-5. **Hardware-ready** — designed for XC8 compilation targeting real PIC16F15356 silicon
+1. Reconstruct the documented northbound PIC contract without inheriting historical bugs.
+2. Keep runtime execution bounded and analyzable in a host-buildable C codebase.
+3. Cross-check wire-visible behavior against a Go oracle (`helianthus-tinyebus`).
+4. Make hardware gaps explicit instead of pretending silicon parity where it does not yet exist.
 
 ## Architecture
 
@@ -29,7 +37,7 @@ graph TD
     subgraph PIC16F15356["PIC16F15356 (this firmware)"]
         APP["Application<br/><i>pic16f15356_app</i><br/>ISR/mainline wrapper"]
         RT["Runtime <i>(1830 lines)</i><br/>Protocol FSM &bull; ENH/ENS codec<br/>Scan engine &bull; Descriptor merge<br/>Status emission &bull; Diagnostics"]
-        HAL["HAL<br/><i>pic16f15356_hal</i><br/>ISR latch FIFOs &bull; TMR0 tick<br/>UART mode switching"]
+        HAL["HAL<br/><i>pic16f15356_hal</i><br/>shared sim/XC8 API<br/>staged TX &bull; TMR0 tick"]
         BOOT["Bootloader<br/><i>picboot</i><br/>STX frames &bull; Flash/EEPROM<br/>10 commands &bull; CRC16-CCITT"]
         APP --> RT
         RT --> HAL
@@ -52,13 +60,57 @@ graph TD
 
 ### Adapter Role
 
-This firmware is a **transparent UART bridge**, not an eBUS node. All eBUS protocol responsibilities (CRC-8, frame escaping, arbitration decisions, retransmission) are delegated to the Go gateway running on the ESP host. The PIC handles:
+This firmware is not an eBUS application node. The current tree models the adapter endpoint and hardware bring-up surfaces while keeping the higher-level eBUS semantics in host software. The PIC-side code currently handles or models:
 
 - SYN byte detection and forwarding
 - ENH/ENS encoding between PIC and host
-- Bus byte forwarding with arbitration echo suppression
-- Scan window management and descriptor processing
-- Periodic status emission (snapshot + variant frames)
+- ENH request/response handling
+- scan/status state scaffolding
+- strap decode, LED state, coarse timing, host/bus UART role separation,
+  and staged host TX pacing
+- bootloader framing plus backend-split storage/reset engine
+- runtime normalization from loader-canonical provisioning bytes
+
+The following areas are still scaffolded or synthetic:
+
+- XC8-backed flash/EEPROM/config register access behind the target bootloader profile
+- silicon HAL register binding beyond compile-only register mirrors
+- descriptor acquisition from the live bus
+- W5500/SPI and DHCP
+- exact provision-from-loader parity on first power-up
+
+### HAL Profiles and TX Semantics
+
+`pic16f15356_hal.h` stays the public HAL interface for both build profiles:
+
+- `PICFW_HAL_PROFILE_SIM`: host tests and oracle runs
+- `PICFW_HAL_PROFILE_XC8`: silicon-oriented compile/bind path
+
+The host TX path is now explicitly split inside the HAL:
+
+- `host_tx_stage`: bounded queue filled by mainline after `runtime_step()`
+- simulation outbox: bytes already transmitted by TX-ready service
+
+`hal_drain_host_tx()` / `app_drain_host_tx()` therefore mean:
+
+- on simulation builds: drain only bytes that have actually been transmitted
+- on silicon builds: return `0`, because no simulation outbox exists
+
+Staged bytes are never exposed as transmitted until a TX-ready event consumes
+exactly one byte from the stage queue.
+
+### Provisioning Source of Truth
+
+Provisioning remains loader-canonical. The firmware now treats the legacy
+`ebuspicloader` config windows as the persisted source of truth and normalizes
+them into runtime state during boot:
+
+- settings window `0x0000..0x0007`
+- MUI window `0x0106..0x010D`
+- derived runtime cache for IP, MAC, arbitration delay, and variant policy
+
+The runtime cache is explicitly derivative. It is not a second canonical
+configuration format.
 
 ## Documentation
 
@@ -86,10 +138,23 @@ From reverse-engineering of the original `combined.hex` (Ghidra decompilation, 7
 | Runtime clock | HFINTOSC 32 MHz | OSCCON1=0x60, OSCFRQ=0x06 |
 | TMR0 ISR | ~500 microseconds | T0CON1=0x44, TMR0H=0xF9 |
 | Scheduler tick | ~100 ms | Software divider of 200 |
-| Default UART | ~9600 baud | SPBRG=0x0340 |
-| High-speed UART | ~115200 baud | SPBRG=0x0044 |
+| Bus UART model | ~2400 baud | EUSART1 SPBRG=0x0D04 |
+| Host UART default | ~9600 baud | EUSART2 SPBRG=0x0340 |
+| Host UART high-speed | ~115200 baud | EUSART2 SPBRG=0x0044 |
 | Bootloader slow | 115200 baud | Host-side contract |
-| Bootloader fast | 921600 baud | Host-side contract |
+| Bootloader fast | 921600 baud | Host-side contract only; not implemented as a PIC boot path in this tree |
+
+## Bootloader Profiles
+
+The bootloader code now has two explicit profiles under the same frame/parser
+engine:
+
+- `picboot_bootloader_t`: host validation model with flash/EEPROM/config RAM mirrors
+- `picboot_target_t`: target-facing profile that delegates flash/EEPROM/config
+  access and reset handoff through backend callbacks
+
+This split is meant to let XC8/silicon builds bind real NVM register access
+without dragging the 33KB host model into PIC RAM.
 
 ## Determinism Enforcement
 
@@ -102,8 +167,8 @@ Every commit is gated by automated determinism checks. See [DETERMINISM.md](DETE
 | R3: All loops bounded | `make check-loops` | Enforced |
 | R6: No floating point | `make check-float` | Enforced |
 | R8: Complexity bounded | `make check-complexity` | Enforced |
-| R4: ISR constraints | Future (XC8 target) | Planned |
-| R5: No blocking delays | Future (XC8 target) | Planned |
+| R4: ISR constraints | Optional XC8-oriented target | Available, not part of `check-all` |
+| R5: No blocking delays | Optional XC8-oriented target | Available, not part of `check-all` |
 | R9: Hardware timers | Code review | Manual |
 | R10: Power-of-two buffers | Code review | Manual |
 
@@ -111,13 +176,16 @@ Every commit is gated by automated determinism checks. See [DETERMINISM.md](DETE
 # Run all determinism checks
 make check-all
 
+# Compile the silicon HAL profile with the host compiler
+make check-xc8-compile
+
 # Run full test suite + oracle parity
 make test && make oracle-check
 ```
 
 ## Adversarial Validation
 
-The codebase underwent 2 rounds of adversarial analysis by 11 independent AI agents attacking from:
+The codebase is reviewed adversarially from multiple angles, especially around:
 
 - **C11 undefined behavior** — shifts, overflow, null deref, buffer bounds
 - **Silent failure paths** — ignored returns, lost data, masked errors
@@ -127,7 +195,7 @@ The codebase underwent 2 rounds of adversarial analysis by 11 independent AI age
 - **eBUS wire protocol** — arbitration, timing, layer separation
 - **Scan FSM behavioral parity** — mathematical correctness vs decompiled original
 
-**Result: 64 findings identified, 64 fixed, converged to 0/0/0 (CRITICAL/HIGH/MEDIUM).**
+The repo should be treated as a deterministic scaffold under active review, not as evidence that all production risks are closed.
 
 ## Build & Test
 
@@ -144,6 +212,9 @@ make oracle-check
 # Run determinism enforcement
 make check-all
 
+# Compile-only check for the XC8-oriented HAL profile
+make check-xc8-compile
+
 # Run check script self-tests
 bash tests/test_checks.sh
 
@@ -155,13 +226,12 @@ make clean
 
 | Component | Lines |
 |-----------|-------|
-| `runtime/src/runtime.c` | 1,830 |
-| `tests/test_runtime.c` | 2,684 |
-| `bootloader/src/picboot.c` | 833 |
-| `tools/picfw_oracle_check.c` | 1,412 |
-| Total codebase | ~7,700 |
-| Test suites | 32+ |
-| Adversarial findings resolved | 64/64 |
+| `runtime/src/runtime.c` | see local checkout |
+| `tests/test_runtime.c` | see local checkout |
+| `bootloader/src/picboot.c` | see local checkout |
+| `tools/picfw_oracle_check.c` | see local checkout |
+| Static RAM footprint | `make check-all` |
+| Test suites | host-side only |
 
 ## Project Structure
 

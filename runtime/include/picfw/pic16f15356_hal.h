@@ -4,16 +4,25 @@
 #include "eeprom.h"
 #include "ethernet.h"
 #include "led.h"
+#include "loader_config.h"
 #include "runtime.h"
 #include "w5500.h"
 
+#define PICFW_HAL_PROFILE_SIM 1u
+#define PICFW_HAL_PROFILE_XC8 2u
+
+#ifndef PICFW_HAL_ACTIVE_PROFILE
+#define PICFW_HAL_ACTIVE_PROFILE PICFW_HAL_PROFILE_SIM
+#endif
+
 #define PICFW_PIC16F15356_ISR_LATCH_CAP 16u
+#define PICFW_PIC16F15356_HOST_TX_STAGE_CAP 16u
+#define PICFW_PIC16F15356_HOST_TX_STAGE_BUDGET 8u
 #define PICFW_PIC16F15356_MAINLINE_BYTE_BUDGET 8u
 
 typedef enum picfw_pic16f15356_uart_mode {
   PICFW_PIC16F15356_UART_MODE_DEFAULT = 0u,
   PICFW_PIC16F15356_UART_MODE_HIGH_SPEED = 1u,
-  PICFW_PIC16F15356_UART_MODE_VERY_HIGH_SPEED = 2u,
 } picfw_pic16f15356_uart_mode_t;
 
 typedef struct picfw_pic16f15356_byte_fifo {
@@ -22,6 +31,13 @@ typedef struct picfw_pic16f15356_byte_fifo {
   uint8_t tail;
   uint8_t count;
 } picfw_pic16f15356_byte_fifo_t;
+
+typedef struct picfw_pic16f15356_tx_outbox {
+  uint8_t items[PICFW_RUNTIME_HOST_TX_CAP];
+  uint8_t head;
+  uint8_t tail;
+  uint8_t count;
+} picfw_pic16f15356_tx_outbox_t;
 
 typedef struct picfw_pic16f15356_registers {
   /* Oscillator */
@@ -59,32 +75,53 @@ typedef struct picfw_pic16f15356_registers {
   uint8_t latc;
   /* Weak pull-ups */
   uint8_t wpub;
+  /* Port input mirrors / sampled states */
+  uint8_t porta;
+  uint8_t portb;
+  uint8_t portc;
   /* PPS input select */
   uint8_t rx1pps;
   uint8_t rx2pps;
   /* PPS output (RB3 → EUSART1 TX, RC1 → EUSART2 TX) */
   uint8_t rb3pps;
   uint8_t rc1pps_out;
+  /* TX register mirrors */
+  uint8_t tx1reg;
+  uint8_t tx2reg;
 } picfw_pic16f15356_registers_t;
 
 typedef struct picfw_pic16f15356_latches {
   picfw_pic16f15356_byte_fifo_t host_rx_fifo;
   picfw_pic16f15356_byte_fifo_t bus_rx_fifo;
-  picfw_pic16f15356_byte_fifo_t host_tx_fifo;
+  picfw_pic16f15356_byte_fifo_t host_tx_stage;
   uint16_t tmr0_isr_count;
   uint16_t scheduler_subticks;
   uint16_t scheduler_pending;
   uint32_t host_rx_overruns;
   uint32_t bus_rx_overruns;
   uint32_t host_tx_overruns;
-  /* Simulated port input state (set by test harness or ISR) */
-  uint8_t porta_input;
-  uint8_t portb_input;
-  uint8_t portc_input;
-  /* TX register empty flags (set by ISR, cleared by mainline) */
+  /* TX register empty flags / latched readiness. */
   picfw_bool_t host_tx_ready;
   picfw_bool_t bus_tx_ready;
 } picfw_pic16f15356_latches_t;
+
+typedef struct picfw_pic16f15356_hal_sim_state {
+  uint8_t porta_input;
+  uint8_t portb_input;
+  uint8_t portc_input;
+  picfw_pic16f15356_tx_outbox_t host_tx_outbox;
+} picfw_pic16f15356_hal_sim_state_t;
+
+typedef struct picfw_pic16f15356_hal_xc8_state {
+  picfw_bool_t host_txreg_loaded;
+  picfw_bool_t bus_txreg_loaded;
+} picfw_pic16f15356_hal_xc8_state_t;
+
+typedef struct picfw_pic16f15356_nvm {
+  picfw_eeprom_t eeprom;
+  picfw_loader_storage_t loader_storage;
+  picfw_bool_t initialized;
+} picfw_pic16f15356_nvm_t;
 
 typedef struct picfw_pic16f15356_hal {
   picfw_pic16f15356_registers_t regs;
@@ -95,12 +132,19 @@ typedef struct picfw_pic16f15356_hal {
   picfw_pic16f15356_uart_mode_t uart_mode;
   picfw_led_t led;
   picfw_eeprom_t eeprom;
+  picfw_loader_config_t loader_config;
+  picfw_loader_effective_mode_t loader_mode;
   picfw_w5500_t w5500;
   picfw_ethernet_t ethernet;
   picfw_bool_t wifi_variant;     /* cached from strap decode at init */
   picfw_bool_t ethernet_variant; /* cached from strap decode at init */
   picfw_bool_t wifi_ready;       /* Wemos readiness: RB0 driven HIGH */
   picfw_bool_t bootloader_entry; /* J11 PGC+PGD both LOW at POR */
+#if PICFW_HAL_ACTIVE_PROFILE == PICFW_HAL_PROFILE_SIM
+  picfw_pic16f15356_hal_sim_state_t profile;
+#else
+  picfw_pic16f15356_hal_xc8_state_t profile;
+#endif
 } picfw_pic16f15356_hal_t;
 
 /* J12 AUX strap configuration (active-low: open=high, GND=low) */
@@ -112,8 +156,12 @@ typedef struct picfw_pic16f15356_straps {
 
 void picfw_pic16f15356_hal_reset(picfw_pic16f15356_hal_t *hal);
 void picfw_pic16f15356_hal_runtime_init(picfw_pic16f15356_hal_t *hal);
+void picfw_pic16f15356_hal_runtime_init_with_nvm(
+    picfw_pic16f15356_hal_t *hal, picfw_pic16f15356_nvm_t *nvm);
+void picfw_pic16f15356_nvm_init(picfw_pic16f15356_nvm_t *nvm);
 void picfw_pic16f15356_hal_set_uart_mode(picfw_pic16f15356_hal_t *hal, picfw_pic16f15356_uart_mode_t mode);
-uint16_t picfw_pic16f15356_hal_current_spbrg(const picfw_pic16f15356_hal_t *hal);
+uint16_t picfw_pic16f15356_hal_current_bus_spbrg(const picfw_pic16f15356_hal_t *hal);
+uint16_t picfw_pic16f15356_hal_current_host_spbrg(const picfw_pic16f15356_hal_t *hal);
 picfw_bool_t picfw_pic16f15356_isr_latch_host_rx(picfw_pic16f15356_hal_t *hal, uint8_t byte);
 picfw_bool_t picfw_pic16f15356_isr_latch_bus_rx(picfw_pic16f15356_hal_t *hal, uint8_t byte);
 void picfw_pic16f15356_isr_latch_tmr0(picfw_pic16f15356_hal_t *hal);
