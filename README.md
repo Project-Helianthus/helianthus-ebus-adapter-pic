@@ -1,6 +1,8 @@
 # helianthus-ebus-adapter-pic
 
-**Deterministic PIC16F15356 firmware for the Helianthus eBUS adapter v3.x**
+> **Deprecated — historical/reference/oracle material only.** This repository is retained for archival firmware, validation, and oracle-reference material. It is not under active development.
+
+**Historical PIC16F15356 firmware for the Helianthus eBUS adapter v3.x**
 
 [![Determinism Check](https://img.shields.io/badge/determinism-enforced-brightgreen)]()
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
@@ -8,19 +10,19 @@
 
 ---
 
-## What This Is
+## Historical Scope
 
-This is a clean-room firmware implementation for the PIC16F15356 microcontroller used in eBUS adapter v3.x hardware. It implements the Enhanced (ENH) adapter protocol, providing a transparent UART bridge between an ESP host and the eBUS wire.
+This repository preserves a clean-room firmware implementation for the PIC16F15356 microcontroller used in eBUS adapter v3.x hardware. It implements the Enhanced (ENH) adapter protocol, providing a transparent UART bridge between an ESP host and the eBUS wire.
 
-**This firmware was generated 100% by AI agents.** No line of code was written by a human. Every function, test, assertion, and comment was authored by AI agents (OpenAI Codex GPT-5.4 and Anthropic Claude Opus 4) operating under human architectural direction and adversarial review.
+The preserved source, tests, and documentation remain available as historical and oracle-reference material.
 
-## Objectives
+## Historical Objectives
 
 1. **Feature parity** with the original production adapter firmware (reverse-engineered via Ghidra decompilation of the legacy `combined.hex` image)
 2. **Perfect determinism** — zero jitter, bounded latency, fully predictable execution on every code path
 3. **Provable correctness** — 64 adversarial findings identified across 8 independent review agents, all resolved to convergence (0 CRITICAL, 0 HIGH, 0 MEDIUM)
 4. **Oracle-validated** — C implementation cross-validated against a Go reference oracle (`helianthus-tinyebus`) for bit-exact parity
-5. **Hardware-ready** — designed for XC8 compilation targeting real PIC16F15356 silicon
+5. **Hardware-ready design** — prepared for XC8 compilation targeting PIC16F15356 silicon
 
 ## Architecture
 
@@ -50,9 +52,9 @@ graph TD
     BOILER --- VRC
 ```
 
-### Adapter Role
+### Historical Adapter Role
 
-This firmware is a **transparent UART bridge**, not an eBUS node. All eBUS protocol responsibilities (CRC-8, frame escaping, arbitration decisions, retransmission) are delegated to the Go gateway running on the ESP host. The PIC handles:
+This firmware was designed as a **transparent UART bridge**, not an eBUS node. eBUS protocol responsibilities (CRC-8, frame escaping, arbitration decisions, retransmission) were delegated to the Go gateway running on the ESP host. The PIC implementation handles:
 
 - SYN byte detection and forwarding
 - ENH/ENS encoding between PIC and host
@@ -91,9 +93,9 @@ From reverse-engineering of the original `combined.hex` (Ghidra decompilation, 7
 | Bootloader slow | 115200 baud | Host-side contract |
 | Bootloader fast | 921600 baud | Host-side contract |
 
-## Determinism Enforcement
+## Historical Determinism Enforcement
 
-Every commit is gated by automated determinism checks. See [DETERMINISM.md](DETERMINISM.md) for full rules.
+The preserved project includes automated determinism checks. See [DETERMINISM.md](DETERMINISM.md) for the historical rules.
 
 | Rule | Check | Status |
 |------|-------|--------|
@@ -115,9 +117,9 @@ make check-all
 make test && make oracle-check
 ```
 
-## Adversarial Validation
+## Historical Adversarial Validation
 
-The codebase underwent 2 rounds of adversarial analysis by 11 independent AI agents attacking from:
+The codebase underwent 2 rounds of adversarial analysis by 11 independent AI agents examining:
 
 - **C11 undefined behavior** — shifts, overflow, null deref, buffer bounds
 - **Silent failure paths** — ignored returns, lost data, masked errors
@@ -129,7 +131,7 @@ The codebase underwent 2 rounds of adversarial analysis by 11 independent AI age
 
 **Result: 64 findings identified, 64 fixed, converged to 0/0/0 (CRITICAL/HIGH/MEDIUM).**
 
-## Build & Test
+## Archived Build & Test Commands
 
 ```bash
 # Prerequisites: C11 compiler (clang or gcc), Python 3
@@ -151,7 +153,7 @@ bash tests/test_checks.sh
 make clean
 ```
 
-## Metrics
+## Historical Metrics
 
 | Component | Lines |
 |-----------|-------|
@@ -210,4 +212,5 @@ GNU Affero General Public License v3.0 or later. See [LICENSE](LICENSE).
 
 - [helianthus-tinyebus](https://github.com/Project-Helianthus/helianthus-tinyebus) — Go oracle, ESP8266 bridge, adapter protocol reference
 - [helianthus-ebusgateway](https://github.com/Project-Helianthus/helianthus-ebusgateway) — Go eBUS gateway (semantic layer, GraphQL, MCP)
+- [helianthus-docs-ebus](https://github.com/Project-Helianthus/helianthus-docs-ebus) — eBUS architecture and protocol documentation
 - [helianthus-ha-integration](https://github.com/Project-Helianthus/helianthus-ha-integration) — Home Assistant custom integration
