@@ -9,8 +9,11 @@ on:
   pull_request:
     branches: [main, develop]
     paths:
+      - 'AGENTS.md'
+      - 'README.md'
       - 'runtime/**'
       - 'bootloader/**'
+      - '.github/workflows/**'
       - 'scripts/**'
       - 'tests/**'
       - 'tools/**'
@@ -18,6 +21,8 @@ on:
   push:
     branches: [main]
     paths:
+      - 'AGENTS.md'
+      - 'README.md'
       - 'runtime/**'
       - 'bootloader/**'
       - '.github/workflows/**'

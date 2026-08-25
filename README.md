@@ -1,6 +1,6 @@
 # helianthus-ebus-adapter-pic
 
-> **Deprecated — historical/reference/oracle material only.** This repository is retained for archival firmware, validation, and oracle-reference material. It is not under active development.
+> **DEPRECATED — historical deterministic PIC firmware and validation reference.** This repository is retained for archival firmware, validation, and oracle-reference material. It is not under active development; no new production firmware or hardware track starts here by default.
 
 **Historical PIC16F15356 firmware for the Helianthus eBUS adapter v3.x**
 
